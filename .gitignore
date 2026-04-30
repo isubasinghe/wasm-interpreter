@@ -1,3 +1,7 @@
 build
 wasm-vm
 *.wasm
+.codex
+_build/
+.direnv/
+.ccls-cache/
