@@ -1,0 +1,10 @@
+clang
+%cpp -std=c++20
+%c -std=c11
+%h -x c++-header
+-isystem
+/usr/include/c++/11
+-isystem
+/usr/include/x86_64-linux-gnu/c++/11
+-Iinc
+-I.

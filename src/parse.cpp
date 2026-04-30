@@ -545,7 +545,7 @@ void WasmModule::decode_buffer(buffer_t &buf) {
 /* Main Parse routine */
 WasmModule parse_bytecode(const byte* start, const byte* end) {
   
-  WasmModule module = {};
+  WasmModule mod = {};
 
   /* Initialize buffer */
   buffer_t main_buf = {start, start, end};
@@ -556,11 +556,11 @@ WasmModule parse_bytecode(const byte* start, const byte* end) {
   }
 
   /* Decode entire module elements */
-  module.decode_buffer(buf);
+  mod.decode_buffer(buf);
   
   /* Has to match exactly */
   if (buf.ptr != buf.end) {
     throw std::runtime_error("Parse | Unexpected end");
   }
-  return module;
+  return mod;
 }

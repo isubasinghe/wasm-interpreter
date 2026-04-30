@@ -264,6 +264,13 @@ class WasmModule {
     inline std::deque <FuncDecl> &Funcs() { return this->funcs; }
     inline std::deque <GlobalDecl> &Globals() { return this->globals; }
     inline std::list  <ExportDecl> &Exports() { return this->exports; }
+    inline std::list  <SigDecl>    &Sigs()    { return this->sigs; }
+    inline ImportSet               &Imports() { return this->imports; }
+    inline std::list  <TableDecl>  &Tables()  { return this->tables; }
+    inline std::list  <MemoryDecl> &Mems()    { return this->mems; }
+    inline std::list  <ElemDecl>   &Elems()   { return this->elems; }
+    inline std::list  <DataDecl>   &Datas()   { return this->datas; }
+    inline std::list  <CustomDecl> &Customs() { return this->customs; }
 
     inline FuncDecl* get_start_fn() { return this->start_fn; }
     inline uint32_t get_num_customs() { return this->customs.size(); }
@@ -274,3 +281,36 @@ class WasmModule {
 };
 
 
+
+struct MemArg {
+  uint32_t align = 0;
+  uint32_t offset = 0;
+};
+
+struct BrTable {
+  std::vector<uint32_t> labels;
+  uint32_t default_label = 0;
+};
+
+struct Immediate {
+  opcode_imm_type kind = IMM_NONE;
+
+  int64_t signed_value = 0;
+  uint64_t unsigned_value = 0;
+  uint64_t unsigned_value2 = 0;
+
+  float f32 = 0.0f;
+  double f64 = 0.0;
+  wasm_type_t type = WASM_TYPE_I32;
+  MemArg memarg;
+  uint8_t laneidx = 0;
+  std::array<byte, 16> bytes = {};
+  BrTable br_table;
+  std::vector<wasm_type_t> types;
+};
+
+struct Instruction {
+  Opcode_t opcode = 0;
+  size_t offset = 0;
+  Immediate imm;
+};

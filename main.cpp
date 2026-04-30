@@ -7,6 +7,8 @@
 #include "common.h"
 #include "parse.h"
 #include "ir.h"
+#include "dump.h"
+#include "interpreter.h"
 
 static struct option long_options[] = {
   {"trace", no_argument,  &g_trace, 1},
@@ -65,15 +67,20 @@ int main(int argc, char *argv[]) {
   }
 
   TRACE("loaded %s: %ld bytes\n", infile, r);
-  WasmModule module = parse_bytecode(start, end);
+  WasmModule mod = parse_bytecode(start, end);
   unload_file(&start, &end);
   
   /* Interpreter here */
   /* */
 
+  // dump_module(mod);
+  Interpreter interpreter = Interpreter(mod);
+  interpreter.run_function(0);
+
+  
+
   return 0;
 }
-
 
 
 

@@ -61,6 +61,24 @@ typedef enum {
   WASM_TYPE_FUNC = 0x60
 } wasm_type_t;
 
+
+#ifdef __cplusplus
+#include <ostream>
+inline std::ostream& operator<<(std::ostream& os, wasm_type_t t) {
+  switch(t) {
+    case WASM_TYPE_I32: return os << "i32";
+    case WASM_TYPE_I64: return os << "i64";
+    case WASM_TYPE_F32: return os << "f32";
+    case WASM_TYPE_F64: return os << "f64";
+    case WASM_TYPE_V128: return os << "v128";
+    case WASM_TYPE_FUNCREF: return os << "funcref";
+    case WASM_TYPE_EXTERNREF: return os << "externref";
+    case WASM_TYPE_FUNC: return os << "func";
+  }
+  return os << "wasm_type_t(" << static_cast<int>(t) << ")";
+}
+#endif
+
 /* Kind decoding */
 typedef enum {
   KIND_FUNC = WASM_DESC_FUNC, 
@@ -126,4 +144,11 @@ typedef struct {
 } opcode_entry_t;
 
 /* Defined in C file so we can use designated initializers */
+#ifdef __cplusplus
+extern "C" {
+#endif
 extern opcode_entry_t opcode_table[];
+extern bool legal_opcodes_table[];
+#ifdef __cplusplus
+}
+#endif
