@@ -1,5 +1,6 @@
 #include <stack>
 #include <array>
+#include <iostream>
 #include <cstring>
 #include <stdexcept>
 #include <vector>
@@ -216,7 +217,30 @@ std::vector<Instruction> Interpreter::parse_function(const FuncDecl& f) {
   return instructions;
 }
 
-void Interpreter::run_function(int index) {
+void Interpreter::handle_call(uint32_t fn_idx) {
+  if(static_cast<size_t>(fn_idx) >= this->functions.size()) {
+    std::cout << "fn_idx >= fn.size()\n";
+    throw std::exception();
+    return;
+  }
+
+  auto function = this->functions[fn_idx];
+  if(function.sig->params.size() > this->scratch_pad.size()) {
+    std::cout << "param.size() isn't equal\n";
+    throw std::exception();
+    return;
+  }
+
+  std::list<Immediate> l = std::list<Immediate>();
+  for(int i=0; i < function.sig->params.size(); i++) {
+    Immediate im = this->scratch_pad.top();
+    l.push_back(im);
+  }
+  this->run_function(fn_idx, l);
+}
+
+
+void Interpreter::run_function(int index, const std::list<Immediate> args) {
   if(index < 0 || static_cast<size_t>(index) >= this->functions.size()) {
     return;
   }
@@ -224,6 +248,26 @@ void Interpreter::run_function(int index) {
   std::vector<Instruction> instructions = this->parse_function(this->functions[index]);
 
   for(auto const &instr: instructions) {
+    switch(instr.opcode) {
+      case WASM_OP_CALL:
+        this->handle_call(instr.imm.signed_value);
+        break;
+      case WASM_OP_I32_CONST:
+        this->scratch_pad.push(instr.imm);
+        break;
+      case WASM_EOF:
+        break;
+      default:
+        std::printf("%0x not supported\n", instr.opcode);
+    }
   }
   
+}
+
+void Interpreter::dump_stack() {
+  while(!this->scratch_pad.empty()) {
+    auto val = this->scratch_pad.top();
+    std::cout << val << std::endl;
+    this->scratch_pad.pop();
+  }
 }

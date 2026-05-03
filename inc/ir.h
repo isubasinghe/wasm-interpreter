@@ -3,10 +3,12 @@
 #include <sys/syscall.h>
 #include <cstdint>
 #include <cstddef>
+#include <iomanip>
 #include <list>
 #include <string>
 #include <algorithm>
 #include <memory>
+#include <ostream>
 #include <unordered_map>
 
 #include "common.h"
@@ -293,6 +295,29 @@ struct BrTable {
 };
 
 struct Immediate {
+  Immediate() = default;
+
+  explicit Immediate(int32_t value)
+      : kind(IMM_I32), signed_value(value), type(WASM_TYPE_I32) {}
+
+  explicit Immediate(int64_t value)
+      : kind(IMM_I64), signed_value(value), type(WASM_TYPE_I64) {}
+
+  explicit Immediate(float value)
+      : kind(IMM_F32), f32(value), type(WASM_TYPE_F32) {}
+
+  explicit Immediate(double value)
+      : kind(IMM_F64), f64(value), type(WASM_TYPE_F64) {}
+
+  explicit Immediate(const std::array<byte, 16>& value)
+      : kind(IMM_V128), type(WASM_TYPE_V128), bytes(value) {}
+
+  explicit Immediate(wasm_type_t ref_type)
+      : kind(IMM_REFNULLT), type(ref_type) {}
+
+  Immediate(wasm_type_t ref_type, uint64_t ref_value)
+      : kind(IMM_REFNULLT), unsigned_value(ref_value), type(ref_type) {}
+
   opcode_imm_type kind = IMM_NONE;
 
   int64_t signed_value = 0;
@@ -308,6 +333,100 @@ struct Immediate {
   BrTable br_table;
   std::vector<wasm_type_t> types;
 };
+
+inline std::ostream& operator<<(std::ostream& os, const Immediate& imm) {
+  switch (imm.kind) {
+    case IMM_NONE:
+      return os << "<none>";
+    case IMM_BLOCKT:
+      return os << "blocktype " << imm.signed_value;
+    case IMM_LABEL:
+      return os << "label " << imm.unsigned_value;
+    case IMM_FUNC:
+      return os << "func " << imm.unsigned_value;
+    case IMM_LOCAL:
+      return os << "local " << imm.unsigned_value;
+    case IMM_GLOBAL:
+      return os << "global " << imm.unsigned_value;
+    case IMM_TABLE:
+      return os << "table " << imm.unsigned_value;
+    case IMM_MEMORY:
+      return os << "memory " << imm.unsigned_value;
+    case IMM_TAG:
+      return os << "tag " << imm.unsigned_value;
+    case IMM_DATA:
+      return os << "data " << imm.unsigned_value;
+    case IMM_LABELS:
+      os << "labels [";
+      for (size_t i = 0; i < imm.br_table.labels.size(); i++) {
+        if (i) os << ' ';
+        os << imm.br_table.labels[i];
+      }
+      return os << "] default " << imm.br_table.default_label;
+    case IMM_SIG_TABLE:
+      return os << "type " << imm.unsigned_value
+                << " table " << imm.unsigned_value2;
+    case IMM_MEMARG:
+      return os << "offset=" << imm.memarg.offset
+                << " align=" << (1ull << imm.memarg.align);
+    case IMM_I32:
+      return os << "i32 " << static_cast<int32_t>(imm.signed_value);
+    case IMM_I64:
+      return os << "i64 " << imm.signed_value;
+    case IMM_F32:
+      return os << "f32 " << imm.f32;
+    case IMM_F64:
+      return os << "f64 " << imm.f64;
+    case IMM_REFNULLT:
+      return os << "ref.null " << imm.type;
+    case IMM_VALTS:
+      os << "types [";
+      for (size_t i = 0; i < imm.types.size(); i++) {
+        if (i) os << ' ';
+        os << imm.types[i];
+      }
+      return os << ']';
+    case IMM_DATA_MEMORY:
+      return os << "data " << imm.unsigned_value
+                << " memory " << imm.unsigned_value2;
+    case IMM_DATA_TABLE:
+      return os << "data " << imm.unsigned_value
+                << " table " << imm.unsigned_value2;
+    case IMM_MEMORYCP:
+      return os << "memory " << imm.unsigned_value
+                << " memory " << imm.unsigned_value2;
+    case IMM_TABLECP:
+      return os << "table " << imm.unsigned_value
+                << " table " << imm.unsigned_value2;
+    case IMM_V128: {
+      os << "v128 0x";
+      std::ios_base::fmtflags flags = os.flags();
+      char fill = os.fill();
+      for (byte b : imm.bytes) {
+        os << std::hex << std::setw(2) << std::setfill('0')
+           << static_cast<unsigned>(b);
+      }
+      os.flags(flags);
+      os.fill(fill);
+      return os;
+    }
+    case IMM_LANEIDX:
+      return os << "lane " << static_cast<unsigned>(imm.laneidx);
+    case IMM_LANEIDX16:
+      os << "lanes [";
+      for (size_t i = 0; i < imm.bytes.size(); i++) {
+        if (i) os << ' ';
+        os << static_cast<unsigned>(imm.bytes[i]);
+      }
+      return os << ']';
+    case IMM_MEMARG_LANEIDX:
+      return os << "offset=" << imm.memarg.offset
+                << " align=" << (1ull << imm.memarg.align)
+                << " lane=" << static_cast<unsigned>(imm.laneidx);
+  }
+
+  return os << "immediate(" << static_cast<int>(imm.kind) << ')';
+}
 
 struct Instruction {
   Opcode_t opcode = 0;

@@ -174,6 +174,7 @@
 #define WASM_OP_I64_REINTERPRET_F64	0xBD /* "i64.reinterpret_f64", ImmSigs.NONE */
 #define WASM_OP_F32_REINTERPRET_I32	0xBE /* "f32.reinterpret_i32", ImmSigs.NONE */
 #define WASM_OP_F64_REINTERPRET_I64	0xBF /* "f64.reinterpret_i64", ImmSigs.NONE */
+#define WASM_EOF 0xb /* */
 
 /* Illegal opcodes: 25 */
 #define WASM_OP_TRY			0x06 /* "try", ImmSigs.BLOCKT */
