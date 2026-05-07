@@ -8,6 +8,10 @@
 #include <vector>
 #include <deque>
 
+#ifdef __cplusplus
+#include "errors.h"
+#endif
+
 /*** Generic used typedefs ***/
 typedef uint8_t byte;
 typedef std::vector<byte> bytearr;
@@ -47,7 +51,7 @@ extern int g_time;
   opcode_entry_t op_entry = opcode_table[b]; \
   if (op_entry.invalid || (op_entry.mnemonic == 0)) { \
     ERR("Unimplemented opcode %d: %s\n", b, op_entry.mnemonic);  \
-    throw std::runtime_error("Unimplemented");  \
+    throw WasmUnsupportedOpcodeError(b);  \
   } \
 }
 
@@ -138,4 +142,3 @@ uint64_t read_u64(buffer_t* buf);
 std::string read_name(buffer_t* buf);
 /* Read num_bytes, advancing the {ptr} in buffer */
 bytearr read_bytes(buffer_t* buf, uint32_t num_bytes);
-

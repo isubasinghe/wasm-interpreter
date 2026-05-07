@@ -2,6 +2,8 @@
 
 #include <chrono>
 
+#include "errors.h"
+
 const char* wasm_type_string(wasm_type_t type) {
   switch (type) {
     case WASM_TYPE_I32:       return "i32"; break;
@@ -128,7 +130,7 @@ void WasmModule::DescriptorPatch (std::list<T> &list, const WasmModule &mod, std
       case KIND_GLOBAL: v.desc.global = REASSIGN(v.desc.global, Global, GlobalDecl); break;
       default:
         ERR("Import/Export kind: %u\n", v.kind);
-        throw std::runtime_error("Invalid import/export kind");
+        throw WasmValidationError("invalid import/export kind");
     }
   }
 }

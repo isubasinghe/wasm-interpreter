@@ -75,7 +75,7 @@ int main(int argc, char *argv[]) {
 
   // dump_module(mod);
   Interpreter interpreter = Interpreter(mod);
-  interpreter.run_function(0, {});
+  interpreter.run_main();
   interpreter.dump_stack();
 
   

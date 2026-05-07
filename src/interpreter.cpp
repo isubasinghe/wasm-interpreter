@@ -5,6 +5,7 @@
 #include <stdexcept>
 #include <vector>
 
+#include "errors.h"
 #include "interpreter.h"
 #include "ir.h"
 
@@ -12,7 +13,7 @@ namespace {
 
 uint8_t read_byte(const bytearr& code, size_t& pos) {
   if (pos >= code.size()) {
-    throw std::runtime_error("truncated bytecode");
+    throw WasmTruncatedInputError("truncated bytecode");
   }
   return code[pos++];
 }
@@ -31,7 +32,7 @@ uint64_t read_uleb(const bytearr& code, size_t& pos) {
 
     shift += 7;
     if (shift >= 64) {
-      throw std::runtime_error("uleb immediate is too large");
+      throw WasmInvalidImmediateError("uleb immediate is too large");
     }
   }
 }
@@ -48,7 +49,7 @@ int64_t read_sleb(const bytearr& code, size_t& pos) {
   } while ((b & 0x80) != 0 && shift < 64);
 
   if ((b & 0x80) != 0) {
-    throw std::runtime_error("sleb immediate is too large");
+    throw WasmInvalidImmediateError("sleb immediate is too large");
   }
 
   if (shift < 64 && (b & 0x40)) {
@@ -61,7 +62,7 @@ int64_t read_sleb(const bytearr& code, size_t& pos) {
 template <typename T>
 T read_raw(const bytearr& code, size_t& pos) {
   if (pos + sizeof(T) > code.size()) {
-    throw std::runtime_error("truncated raw immediate");
+    throw WasmTruncatedInputError("truncated raw immediate");
   }
 
   T value;
@@ -75,6 +76,22 @@ bool is_prefix_byte(byte b) {
          b == WASM_EXT1_SIMD  || b == WASM_EXT1_THREADS;
 }
 
+bool is_valtype_byte(byte b) {
+  switch (static_cast<wasm_type_t>(b)) {
+    case WASM_TYPE_I32:
+    case WASM_TYPE_I64:
+    case WASM_TYPE_F32:
+    case WASM_TYPE_F64:
+    case WASM_TYPE_V128:
+    case WASM_TYPE_FUNCREF:
+    case WASM_TYPE_EXTERNREF:
+      return true;
+    case WASM_TYPE_FUNC:
+      return false;
+  }
+  return false;
+}
+
 Opcode_t read_opcode(const bytearr& code, size_t& pos) {
   byte b = read_byte(code, pos);
   Opcode_t opcode = b;
@@ -82,16 +99,43 @@ Opcode_t read_opcode(const bytearr& code, size_t& pos) {
   if (is_prefix_byte(b)) {
     uint64_t subopcode = read_uleb(code, pos);
     if (subopcode > 0xff) {
-      throw std::runtime_error("unsupported extended opcode");
+      throw WasmUnsupportedOpcodeError((Opcode_t(b) << 8) | Opcode_t(subopcode));
     }
     opcode = (Opcode_t(b) << 8) | Opcode_t(subopcode);
   }
 
   if (opcode_table[opcode].mnemonic == nullptr) {
-    throw std::runtime_error("unknown opcode");
+    throw WasmUnknownOpcodeError(opcode);
   }
 
   return opcode;
+}
+
+void parse_blocktype(Immediate& imm, const bytearr& code, size_t& pos) {
+  if (pos >= code.size()) {
+    throw WasmTruncatedInputError("truncated blocktype");
+  }
+
+  byte b = code[pos];
+  if (b == 0x40) {
+    pos++;
+    imm.blocktype_kind = WASM_BLOCKTYPE_EMPTY;
+    return;
+  }
+
+  if (is_valtype_byte(b)) {
+    pos++;
+    imm.blocktype_kind = WASM_BLOCKTYPE_VALTYPE;
+    imm.type = static_cast<wasm_type_t>(b);
+    return;
+  }
+
+  int64_t typeidx = read_sleb(code, pos);
+  if (typeidx < 0) {
+    throw WasmInvalidImmediateError("blocktype type index must be non-negative");
+  }
+  imm.blocktype_kind = WASM_BLOCKTYPE_TYPEIDX;
+  imm.unsigned_value = static_cast<uint64_t>(typeidx);
 }
 
 void parse_immediate(Immediate& imm, const bytearr& code, size_t& pos) {
@@ -99,7 +143,7 @@ void parse_immediate(Immediate& imm, const bytearr& code, size_t& pos) {
     case IMM_NONE:
       break;
     case IMM_BLOCKT:
-      imm.signed_value = read_sleb(code, pos);
+      parse_blocktype(imm, code, pos);
       break;
     case IMM_LABEL:
     case IMM_FUNC:
@@ -187,21 +231,48 @@ void parse_immediate(Immediate& imm, const bytearr& code, size_t& pos) {
 
 
 Interpreter::Interpreter(WasmModule mod) {
+  this->mod = mod;
   for(auto const &f: mod.Funcs()) {
     this->push_func(f);
-  }  
+  }
+  
+  for(auto const &d: mod.Datas()) {
+  }
+
+  for(auto const &c: mod.Customs()) {
+  }
+
+  for(auto const &s: mod.Sigs()) {
+  }
+
+  for(auto const &e: mod.Elems()) {
+  }
+
+  for(auto const &g: mod.Globals()) {
+  }
+
+  for(auto const &t: mod.Tables()) {
+    this->add_table(t);
+  }
+
+  for(auto const &d: mod.Datas()) {
+  }
 }
 
 Interpreter::~Interpreter() {
 
 }
 
+void Interpreter::add_table(TableDecl t) {
+  this->tables.push_back(t);
+}
+
 void Interpreter::push_func(FuncDecl f) {
   this->functions.push_back(f);
 }
 
-std::vector<Instruction> Interpreter::parse_function(const FuncDecl& f) {
-  const bytearr& code = f.code_bytes;
+std::vector<Instruction> Interpreter::parse_function(const FuncDecl *f) {
+  const bytearr& code = f->code_bytes;
   std::vector<Instruction> instructions;
 
   size_t pos = 0;
@@ -219,19 +290,15 @@ std::vector<Instruction> Interpreter::parse_function(const FuncDecl& f) {
 
 void Interpreter::handle_call(uint32_t fn_idx) {
   if(static_cast<size_t>(fn_idx) >= this->functions.size()) {
-    std::cout << "fn_idx >= fn.size()\n";
-    throw std::exception();
-    return;
+    throw WasmInvalidIndexError("function index out of bounds: " + std::to_string(fn_idx));
   }
 
   auto function = this->functions[fn_idx];
   if(function.sig->params.size() > this->scratch_pad.size()) {
-    std::cout << "param.size() isn't equal\n";
-    throw std::exception();
-    return;
+    throw WasmStackUnderflowTrap("not enough arguments on stack for direct call");
   }
 
-  std::list<Immediate> l = std::list<Immediate>();
+  std::vector<Immediate> l = std::vector<Immediate>();
   for(int i=0; i < function.sig->params.size(); i++) {
     Immediate im = this->scratch_pad.top();
     l.push_back(im);
@@ -239,13 +306,76 @@ void Interpreter::handle_call(uint32_t fn_idx) {
   this->run_function(fn_idx, l);
 }
 
-
-void Interpreter::run_function(int index, const std::list<Immediate> args) {
-  if(index < 0 || static_cast<size_t>(index) >= this->functions.size()) {
-    return;
+void Interpreter::handle_indirect_call(Immediate imm) {
+  if(imm.kind != IMM_SIG_TABLE) {
+    throw WasmInvalidImmediateError("call_indirect immediate must be a signature/table pair");
   }
 
-  std::vector<Instruction> instructions = this->parse_function(this->functions[index]);
+  if(!this->mapped.contains(imm.unsigned_value)) {
+    throw WasmInvalidIndexError("call_indirect type index is unmapped: " +
+                                std::to_string(imm.unsigned_value));
+  }
+  auto map = this->mapped[imm.unsigned_value];
+  if(map[imm.unsigned_value2] == false) {
+    throw WasmInvalidIndexError("call_indirect table index is unmapped: " +
+                                std::to_string(imm.unsigned_value2));
+  }
+  throw WasmUnsupportedOpcodeError(WASM_OP_CALL_INDIRECT);
+}
+
+static Immediate similar_cast(Immediate imm, Immediate other) {
+  if(imm.type == other.type) {
+    return other;
+  }
+  std::cerr << imm.type << " != " << other.type << std::endl;
+  throw WasmTypeMismatchTrap("operand type mismatch");
+}
+
+void Interpreter::handle_local_get(Immediate imm, std::vector<Immediate> args) {
+  if(imm.kind != IMM_LOCAL) {
+    throw WasmInvalidImmediateError("local.get immediate must be a local index");
+  }
+  if(imm.unsigned_value >= args.size()) {
+    throw WasmInvalidIndexError("local index out of bounds: " +
+                                std::to_string(imm.unsigned_value));
+  }
+  this->scratch_pad.push(args[imm.unsigned_value]);
+}
+
+void Interpreter::handle_f64_add() {
+  if(this->scratch_pad.size() < 2) {
+    throw WasmStackUnderflowTrap("f64.add requires two operands on the stack");
+  }
+  Immediate first = this->scratch_pad.top();
+  this->scratch_pad.pop();
+  Immediate second = this->scratch_pad.top();
+  this->scratch_pad.pop();
+  if(first.type != WASM_TYPE_F64) {
+    throw WasmTypeMismatchTrap("f64.add first operand must be f64");
+  }
+  if(second.type != WASM_TYPE_F64) {
+    throw WasmTypeMismatchTrap("f64.add second operand must be f64");
+  }
+  Immediate imm = Immediate(first.f64 + second.f64);
+  this->scratch_pad.push(imm);
+}
+
+void Interpreter::handle_block(Immediate imm) {
+  switch(imm.blocktype_kind) {
+    case WASM_BLOCKTYPE_EMPTY:
+      break;
+    case WASM_BLOCKTYPE_TYPEIDX:
+      break;
+    case WASM_BLOCKTYPE_VALTYPE:
+      break;
+    default:
+      throw std::exception();
+  }
+}
+
+void Interpreter::run_function(FuncDecl *f, std::vector<Immediate> args) {
+
+  std::vector<Instruction> instructions = this->parse_function(f);
 
   for(auto const &instr: instructions) {
     switch(instr.opcode) {
@@ -257,17 +387,81 @@ void Interpreter::run_function(int index, const std::list<Immediate> args) {
         break;
       case WASM_EOF:
         break;
+      case WASM_OP_CALL_INDIRECT:
+        this->handle_indirect_call(instr.imm);
+        break;
+      case WASM_OP_LOCAL_GET:
+        this->handle_local_get(instr.imm, args);
+        break;
+      case WASM_OP_F64_ADD:
+        this->handle_f64_add();
+        break;
+      case WASM_OP_BLOCK:
+        this->handle_block(instr.imm);
+        break;
       default:
         std::printf("%0x not supported\n", instr.opcode);
     }
   }
-  
+}
+
+void Interpreter::run_function(int index, const std::vector<Immediate> args) {
+
+  if(index < 0 || static_cast<size_t>(index) >= this->functions.size()) {
+    return;
+  }
+  this->run_function(&this->functions[index], args);
+}
+
+void Interpreter::run_main() {
+  FuncDecl *f;
+  for(auto &exp: mod.Exports()) {
+    if(exp.name == "main" && exp.kind == KIND_FUNC) {
+      f = exp.desc.func;
+      break;
+    }
+  }
+  if(f == nullptr) {
+    return;
+  }
+  std::vector<Immediate> params;
+  for(auto const &p: f->sig->params) {
+    switch(p) {
+      case WASM_TYPE_I32:
+        params.push_back(Immediate(static_cast<int32_t>(41)));
+        break;
+      case WASM_TYPE_I64:
+        params.push_back(Immediate(static_cast<int64_t>(42)));
+        break;
+      case WASM_TYPE_F32:
+        params.push_back(Immediate(static_cast<float>(0.41)));
+        break;
+      case WASM_TYPE_F64:
+        params.push_back(Immediate(static_cast<double>(0.82)));
+        break;
+      default:
+        std::cout << "unsupported type" << std::endl;
+        return;
+    }
+  }
+  this->run_function(f, params);
+
 }
 
 void Interpreter::dump_stack() {
+  std::cout << "DUMPING IMMEDIATE" << std::endl;
   while(!this->scratch_pad.empty()) {
     auto val = this->scratch_pad.top();
     std::cout << val << std::endl;
     this->scratch_pad.pop();
   }
+}
+
+
+ControlHandler::ControlHandler() {
+
+}
+
+ControlHandler::~ControlHandler() {
+
 }

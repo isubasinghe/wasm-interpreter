@@ -4,6 +4,10 @@
 #include <stdbool.h>
 #include <stdint.h>
 
+#ifdef __cplusplus
+#include "errors.h"
+#endif
+
 #define WASM_MAGIC 0x6d736100u
 #define WASM_VERSION 1
 
@@ -19,7 +23,7 @@
     case WASM_OP_I64_CONST: WR_I64(val); break;  \
     case WASM_OP_F32_CONST: WR_U32_RAW(val); break;  \
     case WASM_OP_F64_CONST: WR_U64_RAW(val); break; \
-    default: throw std::runtime_error("Invalid initializer expression type\n"); \
+    default: throw WasmParseError("invalid initializer expression type"); \
   } \
   bdeq.push_back(WASM_OP_END);  \
   bytearr (bdeq.begin(), bdeq.end()); \
@@ -60,6 +64,12 @@ typedef enum {
   WASM_TYPE_EXTERNREF = 0x6F,
   WASM_TYPE_FUNC = 0x60
 } wasm_type_t;
+
+typedef enum {
+  WASM_BLOCKTYPE_EMPTY = 0,
+  WASM_BLOCKTYPE_VALTYPE,
+  WASM_BLOCKTYPE_TYPEIDX
+} wasm_blocktype_kind_t;
 
 
 #ifdef __cplusplus

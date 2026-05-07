@@ -121,40 +121,56 @@ uint32_t decode_u32(const uint8_t* ptr, const uint8_t* limit, ssize_t *len) {
 /* Unsigned-32 LEB */
 uint32_t read_u32leb(buffer_t* buf) {
   ssize_t leblen = 0;
-  if (buf->ptr >= buf->end) return 0;
+  if (buf->ptr >= buf->end) {
+    throw WasmTruncatedInputError("truncated u32 leb");
+  }
   uint32_t val = decode_u32leb(buf->ptr, buf->end, &leblen);
-  if (leblen <= 0) buf->ptr = buf->end; // force failure
-  else buf->ptr += leblen;
+  if (leblen <= 0) {
+    throw WasmInvalidImmediateError("invalid u32 leb");
+  }
+  buf->ptr += leblen;
   return val;
 }
 
 /* Signed-32 LEB */
 int32_t read_i32leb(buffer_t* buf) {
   ssize_t leblen = 0;
-  if (buf->ptr >= buf->end) return 0;
+  if (buf->ptr >= buf->end) {
+    throw WasmTruncatedInputError("truncated i32 leb");
+  }
   int32_t val = decode_i32leb(buf->ptr, buf->end, &leblen);
-  if (leblen <= 0) buf->ptr = buf->end; // force failure
-  else buf->ptr += leblen;
+  if (leblen <= 0) {
+    throw WasmInvalidImmediateError("invalid i32 leb");
+  }
+  buf->ptr += leblen;
   return val;
 }
 
 /* Unsigned-64 LEB */
 uint64_t read_u64leb(buffer_t* buf) {
   ssize_t leblen = 0;
-  if (buf->ptr >= buf->end) return 0;
+  if (buf->ptr >= buf->end) {
+    throw WasmTruncatedInputError("truncated u64 leb");
+  }
   uint64_t val = decode_u64leb(buf->ptr, buf->end, &leblen);
-  if (leblen <= 0) buf->ptr = buf->end; // force failure
-  else buf->ptr += leblen;
+  if (leblen <= 0) {
+    throw WasmInvalidImmediateError("invalid u64 leb");
+  }
+  buf->ptr += leblen;
   return val;
 }
 
 /* Signed-64 LEB */
 int64_t read_i64leb(buffer_t* buf) {
   ssize_t leblen = 0;
-  if (buf->ptr >= buf->end) return 0;
+  if (buf->ptr >= buf->end) {
+    throw WasmTruncatedInputError("truncated i64 leb");
+  }
   int64_t val = decode_i64leb(buf->ptr, buf->end, &leblen);
-  if (leblen <= 0) buf->ptr = buf->end; // force failure
-  else buf->ptr += leblen;
+  if (leblen <= 0) {
+    throw WasmInvalidImmediateError("invalid i64 leb");
+  }
+  buf->ptr += leblen;
   return val;
 }
 
@@ -162,7 +178,7 @@ int64_t read_i64leb(buffer_t* buf) {
 uint8_t read_u8(buffer_t* buf) {
   if (buf->ptr >= buf->end) {
     ERR("u8 read out of bounds");
-    return 0;
+    throw WasmTruncatedInputError("truncated u8");
   }
   byte val = *buf->ptr;
   buf->ptr++;
@@ -172,6 +188,9 @@ uint8_t read_u8(buffer_t* buf) {
 /* Raw-32 */
 uint32_t read_u32(buffer_t* buf) {
   ssize_t len;
+  if (buf->ptr + 4 > buf->end) {
+    throw WasmTruncatedInputError("truncated raw u32");
+  }
   uint32_t val = decode_u32(buf->ptr, buf->ptr + 4, &len);
   buf->ptr += 4;
   return val;
@@ -182,7 +201,7 @@ uint64_t read_u64(buffer_t* buf) {
   ssize_t len = 0;
   if (buf->ptr + 8 > buf->end) {
     ERR("u64 read out of bounds");
-    return 0;
+    throw WasmTruncatedInputError("truncated raw u64");
   }
   uint32_t low = decode_u32(buf->ptr, buf->end, &len);
   buf->ptr += len;
@@ -198,7 +217,7 @@ std::string read_name(buffer_t* buf) {
   uint32_t sz = read_u32leb(buf);
   if (buf->ptr + sz > buf->end) {
     ERR("string read out of bounds\n");
-    return NULL;
+    throw WasmTruncatedInputError("truncated name");
   }
  
   std::string str((const char*) buf->ptr, (size_t) sz);
@@ -211,7 +230,7 @@ std::string read_name(buffer_t* buf) {
 bytearr read_bytes(buffer_t* buf, uint32_t num_bytes) {
   if (buf->ptr + num_bytes > buf->end) {
     ERR("bytes read out of bounds\n");
-    return bytearr(buf->ptr, buf->ptr);
+    throw WasmTruncatedInputError("truncated byte string");
   }
   bytearr bytes(buf->ptr, buf->ptr + num_bytes);
   buf->ptr += num_bytes;

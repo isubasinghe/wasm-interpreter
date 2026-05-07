@@ -4,6 +4,7 @@
 #include <stdexcept>
 
 #include "dump.h"
+#include "errors.h"
 #include "ir.h"
 
 namespace {
@@ -12,7 +13,7 @@ uint64_t read_uleb(const bytearr& code, size_t& pos) {
   uint64_t result = 0;
   unsigned shift = 0;
   while (true) {
-    if (pos >= code.size()) throw std::runtime_error("truncated uleb");
+    if (pos >= code.size()) throw WasmTruncatedInputError("truncated uleb");
     byte b = code[pos++];
     result |= uint64_t(b & 0x7f) << shift;
     if ((b & 0x80) == 0) break;
@@ -26,7 +27,7 @@ int64_t read_sleb(const bytearr& code, size_t& pos) {
   unsigned shift = 0;
   byte b;
   do {
-    if (pos >= code.size()) throw std::runtime_error("truncated sleb");
+    if (pos >= code.size()) throw WasmTruncatedInputError("truncated sleb");
     b = code[pos++];
     result |= int64_t(b & 0x7f) << shift;
     shift += 7;
@@ -38,7 +39,7 @@ int64_t read_sleb(const bytearr& code, size_t& pos) {
 
 template <typename T>
 T read_raw(const bytearr& code, size_t& pos) {
-  if (pos + sizeof(T) > code.size()) throw std::runtime_error("truncated raw");
+  if (pos + sizeof(T) > code.size()) throw WasmTruncatedInputError("truncated raw");
   T v;
   std::memcpy(&v, &code[pos], sizeof(T));
   pos += sizeof(T);
@@ -48,6 +49,45 @@ T read_raw(const bytearr& code, size_t& pos) {
 bool is_prefix_byte(byte b) {
   return b == WASM_EXT1_GCREF || b == WASM_EXT1_FC ||
          b == WASM_EXT1_SIMD  || b == WASM_EXT1_THREADS;
+}
+
+bool is_valtype_byte(byte b) {
+  switch (static_cast<wasm_type_t>(b)) {
+    case WASM_TYPE_I32:
+    case WASM_TYPE_I64:
+    case WASM_TYPE_F32:
+    case WASM_TYPE_F64:
+    case WASM_TYPE_V128:
+    case WASM_TYPE_FUNCREF:
+    case WASM_TYPE_EXTERNREF:
+      return true;
+    case WASM_TYPE_FUNC:
+      return false;
+  }
+  return false;
+}
+
+void emit_blocktype(std::ostream& os, const bytearr& code, size_t& pos) {
+  if (pos >= code.size()) throw WasmTruncatedInputError("truncated blocktype");
+
+  byte b = code[pos];
+  if (b == 0x40) {
+    pos++;
+    os << " empty";
+    return;
+  }
+
+  if (is_valtype_byte(b)) {
+    pos++;
+    os << ' ' << static_cast<wasm_type_t>(b);
+    return;
+  }
+
+  int64_t typeidx = read_sleb(code, pos);
+  if (typeidx < 0) {
+    throw WasmInvalidImmediateError("blocktype type index must be non-negative");
+  }
+  os << " (type " << typeidx << ')';
 }
 
 const char* kind_name(wasm_kind_t k) {
@@ -70,7 +110,7 @@ void emit_immediate(std::ostream& os, opcode_imm_type kind,
     case IMM_NONE:
       break;
     case IMM_BLOCKT:
-      os << ' ' << read_sleb(code, pos);
+      emit_blocktype(os, code, pos);
       break;
     case IMM_LABEL:
     case IMM_FUNC:

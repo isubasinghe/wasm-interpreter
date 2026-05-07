@@ -1,6 +1,6 @@
-#include <stdexcept>
 #include <iostream>
 
+#include "errors.h"
 #include "ir.h"
 #include "common.h"
 
@@ -31,7 +31,7 @@ inline static MemoryDecl read_memtype(buffer_t &buf) {
 inline static TableDecl read_tabletype(buffer_t &buf) {
   byte reftype = RD_BYTE();
   if ((reftype != WASM_TYPE_FUNCREF) && (reftype != WASM_TYPE_EXTERNREF)) {
-    throw std::runtime_error("Invalid Reftype\n");
+    throw WasmValidationError("invalid table reference type");
   }
   TableDecl table = { .reftype = (wasm_type_t) reftype, .limits = read_limits(buf) };
   return table;
@@ -74,12 +74,12 @@ static uint32_t decode_const_off_expr(buffer_t &buf, Opcode_t &opcode) {
     }
     default:
       ERR("Unknown opcode in offset expr (%d): Must be i32/64 const\n", opc);
-      throw std::runtime_error("Opcode error");
+      throw WasmUnsupportedOpcodeError(opc);
   }
   
   Opcode_t end = RD_OPCODE();
   if (end != WASM_OP_END) {
-    throw std::runtime_error("Malformed end in offset expr");
+    throw WasmParseError("malformed end in offset expression");
   }
   opcode = opc;
   return offset;
@@ -109,12 +109,12 @@ static bytearr decode_init_expr(buffer_t &buf) {
 
     default:
       ERR("Unknown init expr opcode: %u\n", opcode);
-      throw std::runtime_error("Opcode error");
+      throw WasmUnsupportedOpcodeError(opcode);
   }
 
   Opcode_t end = RD_OPCODE();
   if (end != WASM_OP_END) {
-    throw std::runtime_error("Malformed end in init_expr");
+    throw WasmParseError("malformed end in init expression");
   }
   const byte* endp = buf.ptr;
   return bytearr(startp, endp);
@@ -128,7 +128,7 @@ void WasmModule::decode_type_section(buffer_t &buf, uint32_t len) {
     /* Read type */
     byte type = RD_BYTE();
     if (type != WASM_TYPE_FUNC) {
-      throw std::runtime_error("Parse error: Signatures have to be func type!\n");
+      throw WasmValidationError("type section entries must be function types");
     }
 
     /* For params */
@@ -191,7 +191,7 @@ void WasmModule::decode_import_section (buffer_t &buf, uint32_t len) {
       }
       default: {
         ERR("Import kind: %u\n", import.kind);
-        throw std::runtime_error("Invalid import type");
+        throw WasmValidationError("invalid import descriptor kind");
       }
     }
 
@@ -203,7 +203,7 @@ void WasmModule::decode_import_section (buffer_t &buf, uint32_t len) {
 void WasmModule::decode_function_section (buffer_t &buf, uint32_t len) {
   uint32_t num_imports = this->imports.num_funcs;
   if (num_imports != this->funcs.size()) {
-    throw std::runtime_error ("Malformed func imports");
+    throw WasmValidationError("malformed function imports");
   }
 
   uint32_t num_funcs = RD_U32();
@@ -221,7 +221,7 @@ void WasmModule::decode_function_section (buffer_t &buf, uint32_t len) {
 void WasmModule::decode_table_section (buffer_t &buf, uint32_t len) {
   uint32_t num_imports = this->imports.num_tables;
   if (num_imports != this->tables.size()) {
-    throw std::runtime_error ("Malformed table imports");
+    throw WasmValidationError("malformed table imports");
   }
 
   uint32_t num_tables = RD_U32();
@@ -238,7 +238,7 @@ void WasmModule::decode_memory_section (buffer_t &buf, uint32_t len) {
     MemoryDecl mem = read_memtype(buf);
     this->mems.push_back(mem);
   } else {
-    throw std::runtime_error("Memory component has to be 1!");
+    throw WasmValidationError("memory component count must be exactly 1");
   }
 }
 
@@ -268,7 +268,7 @@ void WasmModule::decode_export_section (buffer_t &buf, uint32_t len) {
         break;
       default: {
         ERR("Export kind: %u\n", exp.kind);
-        throw std::runtime_error("Invalid export type");
+        throw WasmValidationError("invalid export descriptor kind");
       }
     }
 
@@ -295,7 +295,7 @@ void WasmModule::decode_element_section (buffer_t &buf, uint32_t len) {
       case 0: offset = decode_const_off_expr(buf, elem.opcode_offset); break;
       default: {
         ERR("Invalid element segment flag: %d\n", flag);
-        throw std::runtime_error("Flag error");
+        throw WasmValidationError("invalid element segment flag");
       }
     }
     elem.table_offset = offset;
@@ -359,7 +359,7 @@ void WasmModule::decode_code_section (buffer_t &buf, uint32_t len) {
 void WasmModule::decode_global_section(buffer_t &buf, uint32_t len) {
   uint32_t num_imports = this->imports.num_globals;
   if (num_imports != this->globals.size()) {
-    throw std::runtime_error ("Malformed global imports");
+    throw WasmValidationError("malformed global imports");
   }
 
   uint32_t num_globs = RD_U32();
@@ -376,8 +376,7 @@ void WasmModule::decode_data_section(buffer_t &buf, uint32_t len) {
   if (this->has_datacount) {
     if (num_datas != this->num_datas_datacount) {
       ERR("Num datas: %u | Num datacount: %u\n", num_datas, this->num_datas_datacount);
-      throw std::runtime_error ("Datacount section and data section vector "
-                                "size don't match");
+      throw WasmValidationError("datacount section and data section vector size do not match");
     }
   }
   /* Create datas if datacount wasn't present to do so */
@@ -410,7 +409,7 @@ void WasmModule::decode_data_section(buffer_t &buf, uint32_t len) {
       }
       default: {
         ERR("Invalid data segment flag: %d\n", flag);
-        throw std::runtime_error("Flag error");
+        throw WasmValidationError("invalid data segment flag");
       }
     }
     data.mem_offset = offset;
@@ -465,7 +464,7 @@ void WasmModule::decode_custom_section(buffer_t &buf, uint32_t len) {
               buf.ptr - start_subsec,
               buf.ptr - start_subsec,
               buf.end - start_subsec);
-          throw std::runtime_error("Subsection parsing error");
+          throw WasmParseError("custom subsection was not fully consumed");
         }
       }
     }
@@ -488,12 +487,12 @@ void WasmModule::decode_buffer(buffer_t &buf) {
   /* Magic number & Version */
   uint32_t magic = RD_U32_RAW();
   if (magic != WASM_MAGIC) {
-    throw std::runtime_error("Parse | Wasm Magic Value");
+    throw WasmParseError("invalid wasm magic value");
   }
 
   uint32_t version = RD_U32_RAW();
   if (version != WASM_VERSION) {
-    throw std::runtime_error("Parse | Wasm Version");
+    throw WasmParseError("unsupported wasm version");
   }
 
   this->magic = magic;
@@ -525,7 +524,7 @@ void WasmModule::decode_buffer(buffer_t &buf) {
       #undef DECODE_CALL
       default:
         ERR("Unknown section id: %u\n", section_id);
-        throw std::runtime_error("Section parsing error");
+        throw WasmParseError("unknown section id");
     }
 
     if (cbuf.ptr != cbuf.end) {
@@ -534,7 +533,7 @@ void WasmModule::decode_buffer(buffer_t &buf) {
           cbuf.start - buf.start, 
           cbuf.ptr - buf.start, 
           cbuf.end - buf.start);
-      throw std::runtime_error("Section parsing error");
+      throw WasmParseError("section was not fully consumed");
     }
     // Advance section
     buf.ptr = cbuf.ptr;
@@ -552,7 +551,7 @@ WasmModule parse_bytecode(const byte* start, const byte* end) {
   buffer_t &buf = main_buf;
 
   if (buf.ptr == buf.end) { 
-    throw std::runtime_error("Empty bytecode");
+    throw WasmParseError("empty bytecode");
   }
 
   /* Decode entire module elements */
@@ -560,7 +559,7 @@ WasmModule parse_bytecode(const byte* start, const byte* end) {
   
   /* Has to match exactly */
   if (buf.ptr != buf.end) {
-    throw std::runtime_error("Parse | Unexpected end");
+    throw WasmParseError("unexpected trailing bytecode");
   }
   return mod;
 }

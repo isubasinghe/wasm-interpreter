@@ -327,6 +327,7 @@ struct Immediate {
   float f32 = 0.0f;
   double f64 = 0.0;
   wasm_type_t type = WASM_TYPE_I32;
+  wasm_blocktype_kind_t blocktype_kind = WASM_BLOCKTYPE_EMPTY;
   MemArg memarg;
   uint8_t laneidx = 0;
   std::array<byte, 16> bytes = {};
@@ -339,7 +340,15 @@ inline std::ostream& operator<<(std::ostream& os, const Immediate& imm) {
     case IMM_NONE:
       return os << "<none>";
     case IMM_BLOCKT:
-      return os << "blocktype " << imm.signed_value;
+      switch (imm.blocktype_kind) {
+        case WASM_BLOCKTYPE_EMPTY:
+          return os << "blocktype empty";
+        case WASM_BLOCKTYPE_VALTYPE:
+          return os << "blocktype " << imm.type;
+        case WASM_BLOCKTYPE_TYPEIDX:
+          return os << "blocktype typeidx " << imm.unsigned_value;
+      }
+      return os << "blocktype ?";
     case IMM_LABEL:
       return os << "label " << imm.unsigned_value;
     case IMM_FUNC:
