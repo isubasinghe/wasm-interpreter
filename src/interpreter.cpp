@@ -293,17 +293,9 @@ void Interpreter::handle_call(uint32_t fn_idx) {
     throw WasmInvalidIndexError("function index out of bounds: " + std::to_string(fn_idx));
   }
 
-  auto function = this->functions[fn_idx];
-  if(function.sig->params.size() > this->scratch_pad.size()) {
-    throw WasmStackUnderflowTrap("not enough arguments on stack for direct call");
-  }
-
-  std::vector<Immediate> l = std::vector<Immediate>();
-  for(int i=0; i < function.sig->params.size(); i++) {
-    Immediate im = this->scratch_pad.top();
-    l.push_back(im);
-  }
-  this->run_function(fn_idx, l);
+  FuncDecl &function = this->functions[fn_idx];
+  std::vector<Immediate> args = this->handler.enter_function(function.sig);
+  this->run_function(&function, args);
 }
 
 void Interpreter::handle_indirect_call(Immediate imm) {
@@ -339,17 +331,17 @@ void Interpreter::handle_local_get(Immediate imm, std::vector<Immediate> args) {
     throw WasmInvalidIndexError("local index out of bounds: " +
                                 std::to_string(imm.unsigned_value));
   }
-  this->scratch_pad.push(args[imm.unsigned_value]);
+  this->stack().push(args[imm.unsigned_value]);
 }
 
 void Interpreter::handle_f64_add() {
-  if(this->scratch_pad.size() < 2) {
+  if(this->stack().size() < 2) {
     throw WasmStackUnderflowTrap("f64.add requires two operands on the stack");
   }
-  Immediate first = this->scratch_pad.top();
-  this->scratch_pad.pop();
-  Immediate second = this->scratch_pad.top();
-  this->scratch_pad.pop();
+  Immediate first = this->stack().top();
+  this->stack().pop();
+  Immediate second = this->stack().top();
+  this->stack().pop();
   if(first.type != WASM_TYPE_F64) {
     throw WasmTypeMismatchTrap("f64.add first operand must be f64");
   }
@@ -357,7 +349,7 @@ void Interpreter::handle_f64_add() {
     throw WasmTypeMismatchTrap("f64.add second operand must be f64");
   }
   Immediate imm = Immediate(first.f64 + second.f64);
-  this->scratch_pad.push(imm);
+  this->stack().push(imm);
 }
 
 void Interpreter::handle_block(Immediate imm) {
@@ -383,7 +375,7 @@ void Interpreter::run_function(FuncDecl *f, std::vector<Immediate> args) {
         this->handle_call(instr.imm.signed_value);
         break;
       case WASM_OP_I32_CONST:
-        this->scratch_pad.push(instr.imm);
+        this->stack().push(instr.imm);
         break;
       case WASM_EOF:
         break;
@@ -450,18 +442,81 @@ void Interpreter::run_main() {
 
 void Interpreter::dump_stack() {
   std::cout << "DUMPING IMMEDIATE" << std::endl;
-  while(!this->scratch_pad.empty()) {
-    auto val = this->scratch_pad.top();
+  while(!this->stack().empty()) {
+    auto val = this->stack().top();
     std::cout << val << std::endl;
-    this->scratch_pad.pop();
+    this->stack().pop();
   }
 }
 
+std::stack<Immediate> &Interpreter::stack() {
+  return this->handler.frame().operand_stack();
+}
+
+StackFrame::StackFrame() {
+
+}
+
+StackFrame::~StackFrame() {
+
+}
+
+std::stack<Immediate> &StackFrame::operand_stack() {
+  return this->stack;
+}
 
 ControlHandler::ControlHandler() {
-
+  this->frames.push(StackFrame());
 }
 
 ControlHandler::~ControlHandler() {
 
+}
+
+StackFrame &ControlHandler::frame() {
+  if(this->frames.empty()) {
+    throw WasmStackUnderflowTrap("no active stack frame");
+  }
+  return this->frames.top();
+}
+
+void ControlHandler::block_frame() {
+}
+
+void ControlHandler::if_frame() {
+
+}
+
+void ControlHandler::loop_frame() {
+
+}
+
+std::vector<Immediate> ControlHandler::enter_function(SigDecl *decl) {
+  bool has_args = (decl != nullptr && (decl->params.size() > 0));
+
+  if(this->frames.size() <= 0 && has_args) {
+    throw WasmError("the function signature expects args the stack frame size is zero, there is nothing to peek at");
+  }
+
+  StackFrame &caller_frame = this->frames.top();
+
+  if(decl->params.size() > caller_frame.stack.size()) {
+    throw WasmError("params were not received in callee's stack");
+  }
+
+  StackFrame callee_frame = StackFrame();
+  std::vector<Immediate> args;
+
+  if(decl != nullptr) { 
+    for(auto const &p: decl->params) {
+      Immediate imm = caller_frame.stack.top();
+      caller_frame.stack.pop();
+      if(imm.type != p) {
+        throw WasmTypeMismatchTrap("expected type x got type y");
+      }
+      args.push_back(imm);
+    }
+  }
+  this->frames.push(callee_frame);
+  return args;
 }
