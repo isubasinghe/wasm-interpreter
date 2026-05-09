@@ -353,8 +353,10 @@ void Interpreter::handle_f64_add() {
 }
 
 void Interpreter::handle_block(Immediate imm) {
+  ControlFrameKind kind;
   switch(imm.blocktype_kind) {
     case WASM_BLOCKTYPE_EMPTY:
+      kind = ControlFrameKind::Block;
       break;
     case WASM_BLOCKTYPE_TYPEIDX:
       break;
@@ -363,11 +365,64 @@ void Interpreter::handle_block(Immediate imm) {
     default:
       throw std::exception();
   }
+  // this->handler.block_frame();
+}
+
+inline std::map<size_t, ControlFrame> preparse(std::vector<Instruction> instructions) {
+  std::map<size_t, ControlFrame> pc_mappings;
+  std::stack<ControlFrame> control_frames;
+
+  for(auto pc = 0; pc < instructions.size(); pc++) {
+    ControlFrame frame;
+    switch(instructions[pc].opcode) {
+      case WASM_OP_BLOCK:
+        frame.kind = ControlFrameKind::Block;
+        frame.start_pc = pc;
+        control_frames.push(frame);
+        break;
+      case WASM_OP_IF:
+        frame.kind = ControlFrameKind::If;
+        frame.start_pc = pc;
+        control_frames.push(frame);
+        break;
+      case WASM_OP_LOOP:
+        frame.kind = ControlFrameKind::Loop;
+        frame.start_pc = pc;
+        control_frames.push(frame);
+        break;
+      case WASM_OP_ELSE:
+        if(control_frames.size() <= 0) {
+          throw WasmError("control frames is at zero but expected an if frame");
+        }
+        if(control_frames.top().kind != ControlFrameKind::If) {
+          throw WasmError("inside else block so expected If control frame at top of stack");
+        }
+        control_frames.top().else_pc = pc;
+        break;
+      case WASM_OP_END:
+        if(instructions.size() -1 != pc) {
+          if(control_frames.size() <= 0) {
+            throw WasmError("control frames is at zero");
+          }
+          ControlFrame finished_frame = control_frames.top();
+          control_frames.pop();
+          finished_frame.end_pc = pc;
+          pc_mappings[finished_frame.start_pc] = finished_frame;
+        }
+        break;
+      default:
+        continue;
+    }
+  }
+
+  return pc_mappings;
 }
 
 void Interpreter::run_function(FuncDecl *f, std::vector<Immediate> args) {
 
   std::vector<Instruction> instructions = this->parse_function(f);
+  preparse(instructions);
+  return;
 
   for(auto const &instr: instructions) {
     switch(instr.opcode) {
@@ -453,6 +508,10 @@ std::stack<Immediate> &Interpreter::stack() {
   return this->handler.frame().operand_stack();
 }
 
+size_t &::Interpreter::pc() {
+  return this->handler.frame().operand_pc();
+}
+
 StackFrame::StackFrame() {
 
 }
@@ -463,6 +522,10 @@ StackFrame::~StackFrame() {
 
 std::stack<Immediate> &StackFrame::operand_stack() {
   return this->stack;
+}
+
+size_t &StackFrame::operand_pc() {
+  return this->pc;
 }
 
 ControlHandler::ControlHandler() {
@@ -480,7 +543,7 @@ StackFrame &ControlHandler::frame() {
   return this->frames.top();
 }
 
-void ControlHandler::block_frame() {
+void ControlHandler::block_frame(ControlFrameKind kind) {
 }
 
 void ControlHandler::if_frame() {

@@ -12,9 +12,33 @@ enum class ControlFrameKind {
 struct ControlFrame {
   ControlFrameKind kind;
   size_t start_pc;
-  size_t end_pc;
+  size_t end_pc = 0;
   size_t else_pc;
 };
+
+inline std::ostream& operator<<(std::ostream& os, const ControlFrame& frame) {
+  switch(frame.kind) {
+    case ControlFrameKind::Block:
+      std::cout << "control block {\n\t" 
+        << frame.start_pc << "\n\t"
+        << frame.end_pc << "\n}";
+      break;
+    case ControlFrameKind::Loop:
+      std::cout << "control loop {\n\t"
+        << frame.start_pc << "\n\t"
+        << frame.end_pc << "\n}";
+      break;
+    case ControlFrameKind::If:
+      std::cout << "control if {\n\t"
+        << frame.start_pc << "\n\t";
+      if(frame.else_pc != 0) {
+          std::cout << frame.else_pc << "\n\t";
+      }
+      std::cout << frame.end_pc << "\n}";
+      break;
+  }
+  return os;
+}
 
 class StackFrame {
   private:
@@ -24,6 +48,7 @@ class StackFrame {
     StackFrame();
     ~StackFrame();
     std::stack<Immediate> &operand_stack();
+    size_t &operand_pc();
     friend class ControlHandler;
 };
 
@@ -32,7 +57,7 @@ class ControlHandler {
     std::stack<StackFrame> frames;
   public:
     StackFrame &frame();
-    void block_frame();
+    void block_frame(ControlFrameKind kind);
     void if_frame();
     void loop_frame();
     std::vector<Immediate> enter_function(SigDecl *decl);
@@ -58,6 +83,7 @@ class Interpreter {
     void handle_f64_add();
     void handle_block(Immediate imm);
     std::stack<Immediate> &stack();
+    size_t &pc();
   public:
 
     Interpreter(WasmModule mod);
