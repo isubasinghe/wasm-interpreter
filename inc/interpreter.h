@@ -1,6 +1,7 @@
 #pragma once
 #include <stack>
 #include <map>
+#include <deque>
 #include "ir.h"
 
 enum class ControlFrameKind {
@@ -14,6 +15,9 @@ struct ControlFrame {
   size_t start_pc;
   size_t end_pc = 0;
   size_t else_pc;
+  size_t stack_height = 0;
+  size_t num_params = 0;
+  size_t num_returns = 0;
 };
 
 inline std::ostream& operator<<(std::ostream& os, const ControlFrame& frame) {
@@ -44,19 +48,25 @@ class StackFrame {
   private:
     size_t pc;
     std::stack<Immediate> stack;
+    std::map<size_t, ControlFrame> pc_mappings;
+    std::stack<ControlFrame> control_frames;
   public:
     StackFrame();
     ~StackFrame();
     std::stack<Immediate> &operand_stack();
     size_t &operand_pc();
+    std::map<size_t, ControlFrame> &operand_pc_mappings();
     friend class ControlHandler;
+    friend class Interpreter;
 };
 
 class ControlHandler {
   private:
-    std::stack<StackFrame> frames;
+    std::deque<StackFrame> frames;
   public:
     StackFrame &frame();
+    size_t &pc();
+    std::map<size_t, ControlFrame> &pc_mappings();
     void block_frame(ControlFrameKind kind);
     void if_frame();
     void loop_frame();
@@ -82,6 +92,8 @@ class Interpreter {
     void run_function(FuncDecl *f, std::vector<Immediate> args);
     void handle_f64_add();
     void handle_block(Immediate imm);
+    void handle_end();
+    void handle_if(Immediate imm);
     std::stack<Immediate> &stack();
     size_t &pc();
   public:

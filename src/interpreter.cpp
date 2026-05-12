@@ -353,19 +353,79 @@ void Interpreter::handle_f64_add() {
 }
 
 void Interpreter::handle_block(Immediate imm) {
-  ControlFrameKind kind;
+  if(imm.kind != IMM_BLOCKT) {
+    throw WasmInvalidImmediateError("block immediate must be a blocktype");
+  }
+
+  auto &pc_mappings = this->handler.pc_mappings();
+  auto frame_it = pc_mappings.find(this->pc());
+  if(frame_it == pc_mappings.end()) {
+    throw WasmError("block control frame missing");
+  }
+  auto &control_frame = frame_it->second;
+
+  SigDecl inline_sig;
+  SigDecl *sig = &inline_sig;
   switch(imm.blocktype_kind) {
     case WASM_BLOCKTYPE_EMPTY:
-      kind = ControlFrameKind::Block;
-      break;
-    case WASM_BLOCKTYPE_TYPEIDX:
       break;
     case WASM_BLOCKTYPE_VALTYPE:
+      inline_sig.results.push_back(imm.type);
+      break;
+    case WASM_BLOCKTYPE_TYPEIDX:
+      if(imm.unsigned_value >= this->mod.Sigs().size()) {
+        throw WasmInvalidIndexError("block type index out of bounds: " +
+                                    std::to_string(imm.unsigned_value));
+      }
+      sig = this->mod.getSig(imm.unsigned_value);
       break;
     default:
-      throw std::exception();
+      throw WasmInvalidImmediateError("invalid blocktype kind");
   }
-  // this->handler.block_frame();
+
+  control_frame.num_params = sig->params.size();
+  control_frame.num_returns = sig->results.size();
+
+  if(this->stack().size() < control_frame.num_params) {
+    throw WasmStackUnderflowTrap("block requires more parameters than are on the stack");
+  }
+
+  std::vector<Immediate> params;
+  params.reserve(control_frame.num_params);
+  for(auto expected = sig->params.rbegin(); expected != sig->params.rend(); ++expected) {
+    Immediate param = this->stack().top();
+    this->stack().pop();
+    if(param.type != *expected) {
+      throw WasmTypeMismatchTrap("block parameter type mismatch");
+    }
+    params.push_back(param);
+  }
+
+  control_frame.stack_height = this->stack().size();
+
+  for(auto param = params.rbegin(); param != params.rend(); ++param) {
+    this->stack().push(*param);
+  }
+  this->handler.frame().control_frames.push(control_frame);
+}
+
+void Interpreter::handle_end() {
+  ControlFrame &frame = this->handler.frame().control_frames.top();
+  switch(frame.kind) {
+    case ControlFrameKind::Block:
+      break;
+    case ControlFrameKind::If:
+      break;
+    case ControlFrameKind::Loop:
+      break;
+    default:
+      break;
+  }
+}
+
+
+void Interpreter::handle_if(Immediate imm) {
+  throw WasmError("if not implemented");
 }
 
 inline std::map<size_t, ControlFrame> preparse(std::vector<Instruction> instructions) {
@@ -421,10 +481,11 @@ inline std::map<size_t, ControlFrame> preparse(std::vector<Instruction> instruct
 void Interpreter::run_function(FuncDecl *f, std::vector<Immediate> args) {
 
   std::vector<Instruction> instructions = this->parse_function(f);
-  preparse(instructions);
-  return;
+  this->handler.pc_mappings() = preparse(instructions);
+  this->pc() = 0;
 
-  for(auto const &instr: instructions) {
+  for(; this->pc() < instructions.size(); ) {
+    Instruction instr = instructions[this->pc()];
     switch(instr.opcode) {
       case WASM_OP_CALL:
         this->handle_call(instr.imm.signed_value);
@@ -446,9 +507,12 @@ void Interpreter::run_function(FuncDecl *f, std::vector<Immediate> args) {
       case WASM_OP_BLOCK:
         this->handle_block(instr.imm);
         break;
+      case WASM_OP_BR_IF:
+        this->handle_if(instr.imm);
       default:
-        std::printf("%0x not supported\n", instr.opcode);
+        std::printf("0x%0x not supported\n", instr.opcode);
     }
+    this->pc() = this->pc() + 1;
   }
 }
 
@@ -528,8 +592,12 @@ size_t &StackFrame::operand_pc() {
   return this->pc;
 }
 
+std::map<size_t, ControlFrame> &StackFrame::operand_pc_mappings() {
+  return this->pc_mappings;
+}
+
 ControlHandler::ControlHandler() {
-  this->frames.push(StackFrame());
+  this->frames.push_front(StackFrame());
 }
 
 ControlHandler::~ControlHandler() {
@@ -540,7 +608,18 @@ StackFrame &ControlHandler::frame() {
   if(this->frames.empty()) {
     throw WasmStackUnderflowTrap("no active stack frame");
   }
-  return this->frames.top();
+  return this->frames.back();
+}
+
+size_t &ControlHandler::pc() {
+  if(this->frames.empty()) {
+    throw WasmStackUnderflowTrap("no active stack frame");
+  }
+  return this->frames.back().operand_pc();
+}
+
+std::map<size_t, ControlFrame> &ControlHandler::pc_mappings() {
+  return this->frames.back().operand_pc_mappings();
 }
 
 void ControlHandler::block_frame(ControlFrameKind kind) {
@@ -561,7 +640,7 @@ std::vector<Immediate> ControlHandler::enter_function(SigDecl *decl) {
     throw WasmError("the function signature expects args the stack frame size is zero, there is nothing to peek at");
   }
 
-  StackFrame &caller_frame = this->frames.top();
+  StackFrame &caller_frame = this->frames.back();
 
   if(decl->params.size() > caller_frame.stack.size()) {
     throw WasmError("params were not received in callee's stack");
@@ -580,6 +659,6 @@ std::vector<Immediate> ControlHandler::enter_function(SigDecl *decl) {
       args.push_back(imm);
     }
   }
-  this->frames.push(callee_frame);
+  this->frames.push_back(callee_frame);
   return args;
 }
