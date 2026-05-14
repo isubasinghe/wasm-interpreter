@@ -406,31 +406,54 @@ void Interpreter::handle_block(Immediate imm) {
   for(auto param = params.rbegin(); param != params.rend(); ++param) {
     this->stack().push(*param);
   }
-  this->handler.frame().control_frames.push(control_frame);
+  this->handler.frame().control_frames.push_back(control_frame);
 }
 
 void Interpreter::handle_end() {
-  ControlFrame &frame = this->handler.frame().control_frames.top();
+  ControlFrame &frame = this->handler.frame().control_frames.back();
   switch(frame.kind) {
     case ControlFrameKind::Block:
+      if(frame.num_returns != 0) {
+        throw WasmError("unsupported non zero return values from blocks");
+      }
+      this->handler.frame().control_frames.pop_back();
       break;
     case ControlFrameKind::If:
       break;
     case ControlFrameKind::Loop:
       break;
     default:
-      break;
+      throw WasmError("unknown control frame kind");
   }
 }
 
 
 void Interpreter::handle_if(Immediate imm) {
-  throw WasmError("if not implemented");
+  if(imm.kind != IMM_LABEL) {
+    throw WasmError("expected a label to jump to");
+  }
+  if(imm.unsigned_value >= this->handler.frame().control_frames.size()) {
+    throw WasmError("jump label exceeded the number of frames on the stack");
+  }
+
+  ControlFrame &frame = this->handler.frame().control_frames[imm.unsigned_value];
+
+  if(this->handler.frame().control_frames.size() <= 0) {
+    throw WasmError("expected at least one item on the stack");
+  }
+  Immediate &value = this->stack().top();
+  if(value.kind != IMM_I32 && value.type != WASM_TYPE_I32) {
+    throw new WasmError("expected a i32 on top of the stack");
+  }
+  if(value.signed_value != 0) {
+    this->pc() = frame.end_pc;
+  }
+  this->stack().pop();
 }
 
 inline std::map<size_t, ControlFrame> preparse(std::vector<Instruction> instructions) {
   std::map<size_t, ControlFrame> pc_mappings;
-  std::stack<ControlFrame> control_frames;
+  std::deque<ControlFrame> control_frames;
 
   for(auto pc = 0; pc < instructions.size(); pc++) {
     ControlFrame frame;
@@ -438,34 +461,34 @@ inline std::map<size_t, ControlFrame> preparse(std::vector<Instruction> instruct
       case WASM_OP_BLOCK:
         frame.kind = ControlFrameKind::Block;
         frame.start_pc = pc;
-        control_frames.push(frame);
+        control_frames.push_back(frame);
         break;
       case WASM_OP_IF:
         frame.kind = ControlFrameKind::If;
         frame.start_pc = pc;
-        control_frames.push(frame);
+        control_frames.push_back(frame);
         break;
       case WASM_OP_LOOP:
         frame.kind = ControlFrameKind::Loop;
         frame.start_pc = pc;
-        control_frames.push(frame);
+        control_frames.push_back(frame);
         break;
       case WASM_OP_ELSE:
         if(control_frames.size() <= 0) {
           throw WasmError("control frames is at zero but expected an if frame");
         }
-        if(control_frames.top().kind != ControlFrameKind::If) {
+        if(control_frames.back().kind != ControlFrameKind::If) {
           throw WasmError("inside else block so expected If control frame at top of stack");
         }
-        control_frames.top().else_pc = pc;
+        control_frames.back().else_pc = pc;
         break;
       case WASM_OP_END:
         if(instructions.size() -1 != pc) {
           if(control_frames.size() <= 0) {
             throw WasmError("control frames is at zero");
           }
-          ControlFrame finished_frame = control_frames.top();
-          control_frames.pop();
+          ControlFrame finished_frame = control_frames.back();
+          control_frames.pop_back();
           finished_frame.end_pc = pc;
           pc_mappings[finished_frame.start_pc] = finished_frame;
         }
@@ -476,6 +499,10 @@ inline std::map<size_t, ControlFrame> preparse(std::vector<Instruction> instruct
   }
 
   return pc_mappings;
+}
+
+void Interpreter::handle_return(FuncDecl *f) {
+  // validate the outputs in here;
 }
 
 void Interpreter::run_function(FuncDecl *f, std::vector<Immediate> args) {
@@ -509,6 +536,10 @@ void Interpreter::run_function(FuncDecl *f, std::vector<Immediate> args) {
         break;
       case WASM_OP_BR_IF:
         this->handle_if(instr.imm);
+        break;
+      case WASM_OP_RETURN:
+        this->handle_return(f);
+        return;
       default:
         std::printf("0x%0x not supported\n", instr.opcode);
     }
@@ -539,7 +570,7 @@ void Interpreter::run_main() {
   for(auto const &p: f->sig->params) {
     switch(p) {
       case WASM_TYPE_I32:
-        params.push_back(Immediate(static_cast<int32_t>(41)));
+        params.push_back(Immediate(static_cast<int32_t>(1)));
         break;
       case WASM_TYPE_I64:
         params.push_back(Immediate(static_cast<int64_t>(42)));

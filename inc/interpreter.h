@@ -49,7 +49,7 @@ class StackFrame {
     size_t pc;
     std::stack<Immediate> stack;
     std::map<size_t, ControlFrame> pc_mappings;
-    std::stack<ControlFrame> control_frames;
+    std::deque<ControlFrame> control_frames;
   public:
     StackFrame();
     ~StackFrame();
@@ -94,6 +94,7 @@ class Interpreter {
     void handle_block(Immediate imm);
     void handle_end();
     void handle_if(Immediate imm);
+    void handle_return(FuncDecl *f);
     std::stack<Immediate> &stack();
     size_t &pc();
   public:
