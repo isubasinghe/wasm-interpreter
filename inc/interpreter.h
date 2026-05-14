@@ -95,6 +95,8 @@ class Interpreter {
     void handle_end();
     void handle_if(Immediate imm);
     void handle_return(FuncDecl *f);
+    void handle_if_block(Immediate imm);
+    void handle_else_block(Immediate imm);
     std::stack<Immediate> &stack();
     size_t &pc();
   public:

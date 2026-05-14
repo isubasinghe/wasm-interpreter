@@ -449,6 +449,13 @@ void Interpreter::handle_if(Immediate imm) {
     this->pc() = frame.end_pc;
   }
   this->stack().pop();
+  throw WasmError("blah");
+}
+
+void Interpreter::handle_if_block(Immediate imm) {
+}
+
+void Interpreter::handle_else_block(Immediate imm) {
 }
 
 inline std::map<size_t, ControlFrame> preparse(std::vector<Instruction> instructions) {
@@ -536,6 +543,12 @@ void Interpreter::run_function(FuncDecl *f, std::vector<Immediate> args) {
         break;
       case WASM_OP_BR_IF:
         this->handle_if(instr.imm);
+        break;
+      case WASM_OP_IF:
+        this->handle_if_block(instr.imm);
+        break;
+      case WASM_OP_ELSE:
+        this->handle_else_block(instr.imm);
         break;
       case WASM_OP_RETURN:
         this->handle_return(f);
