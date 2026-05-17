@@ -16,8 +16,7 @@ struct ControlFrame {
   size_t end_pc = 0;
   size_t else_pc;
   size_t stack_height = 0;
-  size_t num_params = 0;
-  size_t num_returns = 0;
+  SigDecl *sig = nullptr;
 };
 
 inline std::ostream& operator<<(std::ostream& os, const ControlFrame& frame) {
@@ -49,7 +48,7 @@ class StackFrame {
     size_t pc;
     std::stack<Immediate> stack;
     std::map<size_t, ControlFrame> pc_mappings;
-    std::deque<ControlFrame> control_frames;
+    std::stack<ControlFrame> control_frames;
   public:
     StackFrame();
     ~StackFrame();
@@ -74,6 +73,7 @@ class ControlHandler {
 
     ControlHandler();
     ~ControlHandler();
+    friend class Interpreter;
 };
 
 class Interpreter {
@@ -93,10 +93,12 @@ class Interpreter {
     void handle_f64_add();
     void handle_block(Immediate imm);
     void handle_end();
-    void handle_if(Immediate imm);
+    bool handle_br_if(Immediate imm);
     void handle_return(FuncDecl *f);
+    void exit_function(FuncDecl *f);
     void handle_if_block(Immediate imm);
     void handle_else_block(Immediate imm);
+    void handle_i32_eqz();
     std::stack<Immediate> &stack();
     size_t &pc();
   public:
