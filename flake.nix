@@ -34,6 +34,7 @@
             ccls
             wabt
             wasmtime
+            xbyak
             ghcWithShake
           ];
           shellHook = ''
