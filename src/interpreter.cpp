@@ -354,7 +354,7 @@ void Interpreter::handle_f64_add() {
   this->stack().push(imm);
 }
 
-void Interpreter::handle_block(Immediate imm) {
+void Interpreter::enter_control_frame(ControlFrameKind kind, Immediate imm) {
   if(imm.kind != IMM_BLOCKT) {
     throw WasmInvalidImmediateError("block immediate must be a blocktype");
   }
@@ -364,7 +364,11 @@ void Interpreter::handle_block(Immediate imm) {
   if(frame_it == pc_mappings.end()) {
     throw WasmError("block control frame missing");
   }
+
   auto &control_frame = frame_it->second;
+  if (control_frame.kind != kind) {
+    throw WasmError("when type checking control frame kinds, it didn't match");
+  }
 
   SigDecl inline_sig;
   SigDecl *sig = &inline_sig;
@@ -386,7 +390,6 @@ void Interpreter::handle_block(Immediate imm) {
   }
 
   auto num_params = sig->params.size();
-  auto num_returns = sig->results.size();
 
   if(this->stack().size() < num_params) {
     throw WasmStackUnderflowTrap("block requires more parameters than are on the stack");
@@ -404,6 +407,7 @@ void Interpreter::handle_block(Immediate imm) {
   }
 
   control_frame.stack_height = this->stack().size();
+  control_frame.sig = *sig;
 
   for(auto param = params.rbegin(); param != params.rend(); ++param) {
     this->stack().push(*param);
@@ -411,12 +415,13 @@ void Interpreter::handle_block(Immediate imm) {
   this->handler.frame().control_frames.push(control_frame);
 }
 
+void Interpreter::handle_block(Immediate imm) {
+  this->enter_control_frame(ControlFrameKind::Block, imm);
+}
+
 void Interpreter::handle_end() {
   ControlFrame &frame = this->handler.frame().control_frames.top();
-  size_t num_returns = 0;
-  if(frame.sig != nullptr) {
-    num_returns = frame.sig->results.size();
-  }
+  size_t num_returns = frame.sig.results.size();
 
   if(this->stack().size()  < num_returns + frame.stack_height) {
     throw WasmError("unable to pop");
@@ -438,11 +443,13 @@ void Interpreter::handle_end() {
   for(auto result = results.rbegin(); result != results.rend(); result++) {
     this->stack().push(*result);
   }
+  this->handler.frame().control_frames.pop();
 }
 
 
 // if inside block, just branch
-// else unwind control frames.
+// else unwind control frames except target control_frame
+// we rely on handle_end to do this
 bool Interpreter::handle_br_if(Immediate imm) {
   // should advance the program counter?
   // used to avoid processing end instructions
@@ -481,10 +488,40 @@ bool Interpreter::handle_br_if(Immediate imm) {
 }
 
 void Interpreter::handle_if_block(Immediate imm) {
-  std::cout << imm << std::endl;
+  // evaluate the condition at the top of the stack
+  if(this->stack().size() <= 0) {
+    throw WasmError("expected something on the stack");
+  }
+  Immediate val = this->stack().top();
+  this->stack().pop();
+  if(val.type != WASM_TYPE_I32) {
+    throw WasmError("expected a i32 but got something else");
+  }
+  auto &control_frame = this->handler.frame().control_frames.top();
+
+  if(val.signed_value != 0) {
+    this->pc() = this->pc()+1;
+  }else {
+    size_t new_pc = this->pc();
+    if(control_frame.else_pc != 0) {
+      // we don't execute the else branch,  it's a marker to handle reaching the end of `then`
+      new_pc = control_frame.else_pc + 1;
+    }else if(control_frame.end_pc != 0) {
+      new_pc = control_frame.end_pc;
+    }else {
+      throw WasmError("expected else or end pc to be non-zero");
+    }
+    this->pc() = new_pc;
+  }
 }
 
+// we only execute this if we just finished up executing a
+// then, this actually means we never hit the else block
 void Interpreter::handle_else_block(Immediate imm) {
+  // kinda the same exact code as for handle_br_if?
+}
+
+void Interpreter::handle_loop_block(Immediate imm) {
 }
 
 void Interpreter::handle_i32_eqz() {
@@ -499,6 +536,65 @@ void Interpreter::handle_i32_eqz() {
   if(val.signed_value == 0) {
     this->stack().push(Immediate(int32_t(1)));
   }
+}
+
+StepResult Interpreter::run_step(FuncDecl *f,
+      const std::vector<Instruction> &instructions,
+      const std::vector<Immediate> &args
+    ) {
+  StepResult res = StepResult::Continue;
+  bool should_advance = true;
+    
+  Instruction instr = instructions[this->pc()];
+  switch(instr.opcode) {
+    case WASM_OP_CALL:
+      this->handle_call(instr.imm.signed_value);
+      break;
+    case WASM_OP_I32_CONST:
+      this->stack().push(instr.imm);
+      break;
+    // TODO: need to handle indirect calls
+    case WASM_OP_CALL_INDIRECT:
+      this->handle_indirect_call(instr.imm);
+      break;
+    case WASM_OP_LOCAL_GET:
+      this->handle_local_get(instr.imm, args);
+      break;
+    case WASM_OP_F64_ADD:
+      this->handle_f64_add();
+      break;
+    case WASM_OP_BLOCK:
+      this->handle_block(instr.imm);
+      break;
+    case WASM_OP_BR_IF:
+      should_advance = this->handle_br_if(instr.imm);
+      res = StepResult::Continue;
+      break;
+    case WASM_OP_END:
+      // only handle the non function ends
+      if(this->pc() + 1 != instructions.size()) {
+        this->handle_end();
+      }
+      break;
+    case WASM_OP_IF:
+      this->handle_if_block(instr.imm);
+      should_advance = false;
+      break;
+    case WASM_OP_ELSE:
+      this->handle_else_block(instr.imm);
+      should_advance = false;
+      break;
+    case WASM_OP_RETURN:
+      this->handle_return(f);
+      return StepResult::Return;
+    case WASM_OP_I32_EQZ:
+      this->handle_i32_eqz();
+      break;
+    default:
+      std::printf("0x%0x not supported\n", instr.opcode);
+  }
+  this->pc() = this->pc() + (1 & should_advance);
+  return res;
 }
 
 inline std::map<size_t, ControlFrame> preparse(std::vector<Instruction> instructions) {
@@ -595,52 +691,13 @@ void Interpreter::exit_function(FuncDecl *f) {
 }
 
 void Interpreter::run_function(FuncDecl *f, std::vector<Immediate> args) {
-
   std::vector<Instruction> instructions = this->parse_function(f);
   this->handler.pc_mappings() = preparse(instructions);
   this->pc() = 0;
-
-  for(; this->pc() < instructions.size(); ) {
-    bool should_advance = true;
-    Instruction instr = instructions[this->pc()];
-    switch(instr.opcode) {
-      case WASM_OP_CALL:
-        this->handle_call(instr.imm.signed_value);
-        break;
-      case WASM_OP_I32_CONST:
-        this->stack().push(instr.imm);
-        break;
-      case WASM_EOF:
-        break;
-      // TODO: need to handle indirect calls
-      case WASM_OP_CALL_INDIRECT:
-        this->handle_indirect_call(instr.imm);
-        break;
-      case WASM_OP_LOCAL_GET:
-        this->handle_local_get(instr.imm, args);
-        break;
-      case WASM_OP_F64_ADD:
-        this->handle_f64_add();
-        break;
-      case WASM_OP_BLOCK:
-        this->handle_block(instr.imm);
-        break;
-      case WASM_OP_BR_IF:
-        should_advance = this->handle_br_if(instr.imm);
-        break;
-      case WASM_OP_IF:
-        this->handle_if_block(instr.imm);
-        break;
-      case WASM_OP_ELSE:
-        this->handle_else_block(instr.imm);
-        break;
-      case WASM_OP_RETURN:
-        this->handle_return(f);
-        return;
-      default:
-        std::printf("0x%0x not supported\n", instr.opcode);
-    }
-    this->pc() = this->pc() + (1 && should_advance);
+  
+  StepResult res = StepResult::Continue;
+  while(res == StepResult::Continue) {
+    res = this->run_step(f, instructions, args);
   }
 }
 

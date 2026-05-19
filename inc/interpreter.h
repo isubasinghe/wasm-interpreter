@@ -4,6 +4,13 @@
 #include <deque>
 #include "ir.h"
 
+enum class StepResult {
+  Continue,
+  Return,
+  FunctionEnd
+};
+
+
 enum class ControlFrameKind {
   Block,
   Loop,
@@ -14,9 +21,9 @@ struct ControlFrame {
   ControlFrameKind kind;
   size_t start_pc;
   size_t end_pc = 0;
-  size_t else_pc;
+  size_t else_pc = 0;
   size_t stack_height = 0;
-  SigDecl *sig = nullptr;
+  SigDecl sig;
 };
 
 inline std::ostream& operator<<(std::ostream& os, const ControlFrame& frame) {
@@ -98,7 +105,10 @@ class Interpreter {
     void exit_function(FuncDecl *f);
     void handle_if_block(Immediate imm);
     void handle_else_block(Immediate imm);
+    void handle_loop_block(Immediate imm);
     void handle_i32_eqz();
+    void enter_control_frame(ControlFrameKind kind, Immediate imm);
+    StepResult run_step(FuncDecl *f, const std::vector<Instruction> &instructions, const std::vector<Immediate> &args);
     std::stack<Immediate> &stack();
     size_t &pc();
   public:
