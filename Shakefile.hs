@@ -39,7 +39,7 @@ main = shakeArgs shakeOptions { shakeFiles = buildDir } $ do
         cSrcs   <- getDirectoryFiles "" ["src//*.c"]
         let objs = [ buildDir </> s <.> "o" | s <- cppSrcs ++ cSrcs ]
         need objs
-        cmd_ "clang++" "-o" out objs "-lm"
+        cmd_ "clang++" "-o" out objs "-lm" "-lspdlog" "-lfmt"
 
     buildDir <//> "*.cpp.o" %> \out -> do
         let src = dropDirectory1 (dropExtension out)
