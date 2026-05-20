@@ -48,7 +48,7 @@ extern int g_time;
 
 
 #define VALIDATE_OP(b) {  \
-  opcode_entry_t op_entry = opcode_table[b]; \
+  opcode_entry_t op_entry = opcode_table[OP_IDX(b)]; \
   if (op_entry.invalid || (op_entry.mnemonic == 0)) { \
     ERR("Unimplemented opcode %d: %s\n", b, op_entry.mnemonic);  \
     throw WasmUnsupportedOpcodeError(b);  \

@@ -73,11 +73,7 @@ class ControlHandler {
     StackFrame &frame();
     size_t &pc();
     std::map<size_t, ControlFrame> &pc_mappings();
-    void block_frame(ControlFrameKind kind);
-    void if_frame();
-    void loop_frame();
     std::vector<Immediate> enter_function(SigDecl *decl);
-
     ControlHandler();
     ~ControlHandler();
     friend class Interpreter;
@@ -101,12 +97,14 @@ class Interpreter {
     void handle_block(Immediate imm);
     void handle_end();
     bool handle_br_if(Immediate imm);
+    bool handle_br(Immediate imm);
     void handle_return(FuncDecl *f);
     void exit_function(FuncDecl *f);
     void handle_if_block(Immediate imm);
     void handle_else_block(Immediate imm);
     void handle_loop_block(Immediate imm);
     void handle_i32_eqz();
+    void handle_i32_eq();
     void enter_control_frame(ControlFrameKind kind, Immediate imm);
     StepResult run_step(FuncDecl *f, const std::vector<Instruction> &instructions, const std::vector<Immediate> &args);
     std::stack<Immediate> &stack();

@@ -234,7 +234,7 @@ void disassemble(std::ostream& os, const bytearr& code, int base_indent) {
       if (indent > base_indent) indent--;
     }
 
-    const opcode_entry_t& e = opcode_table[opcode];
+    const opcode_entry_t& e = opcode_table[OP_IDX(opcode)];
     emit_indent(os, indent);
     if (e.mnemonic == nullptr) {
       os << "(;unknown 0x" << std::hex << opcode

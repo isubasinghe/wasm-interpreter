@@ -104,7 +104,7 @@ Opcode_t read_opcode(const bytearr& code, size_t& pos) {
     opcode = (Opcode_t(b) << 8) | Opcode_t(subopcode);
   }
 
-  if (opcode_table[opcode].mnemonic == nullptr) {
+  if (opcode_table[OP_IDX(opcode)].mnemonic == nullptr) {
     throw WasmUnknownOpcodeError(opcode);
   }
 
@@ -280,7 +280,7 @@ std::vector<Instruction> Interpreter::parse_function(const FuncDecl *f) {
     Instruction inst;
     inst.offset = pos;
     inst.opcode = read_opcode(code, pos);
-    inst.imm.kind = opcode_table[inst.opcode].imm_type;
+    inst.imm.kind = opcode_table[OP_IDX(inst.opcode)].imm_type;
     parse_immediate(inst.imm, code, pos);
     instructions.push_back(inst);
   }
@@ -362,7 +362,7 @@ void Interpreter::enter_control_frame(ControlFrameKind kind, Immediate imm) {
   auto &pc_mappings = this->handler.pc_mappings();
   auto frame_it = pc_mappings.find(this->pc());
   if(frame_it == pc_mappings.end()) {
-    throw WasmError("block control frame missing");
+    throw WasmError("block control frame missing at " + std::to_string(this->pc()));
   }
 
   auto &control_frame = frame_it->second;
@@ -463,46 +463,86 @@ bool Interpreter::handle_br_if(Immediate imm) {
     throw WasmError("jump label exceeded the number of frames on the stack");
   }
 
-  if(this->handler.frame().control_frames.size() <= 0) {
+  if(this->stack().size() <= 0) {
     throw WasmError("expected at least one item on the stack");
   }
+  Immediate value = this->stack().top();
+  this->stack().pop();
 
-  // removing the frames
-  auto &control_frames = this->handler.frame().control_frames;
-  for(size_t depth = 0; depth < imm.unsigned_value; depth++) {
-    control_frames.pop();
-  }
-  
-  // control frame to jump to
-  ControlFrame frame = control_frames.top();
-  Immediate &value = this->stack().top();
   if(value.kind != IMM_I32 && value.type != WASM_TYPE_I32) {
     throw new WasmError("expected a i32 on top of the stack");
   }
   if(value.signed_value != 0) {
     should_advance = false;
+  }
+
+  auto &control_frames = this->handler.frame().control_frames;
+  for(size_t depth = 0; depth < imm.unsigned_value; depth++) {
+    control_frames.pop();
+  }
+  ControlFrame frame = control_frames.top();
+
+  if(!should_advance) {
+    if(frame.kind == ControlFrameKind::Loop) {
+      this->pc() = frame.start_pc;
+    }else {
+      this->pc() = frame.end_pc;
+    }
+  }
+  return should_advance;
+}
+
+bool Interpreter::handle_br(Immediate imm) {
+
+  if(imm.kind != IMM_LABEL) {
+    throw WasmError("expected a label to jump to");
+  }
+  if(imm.unsigned_value >= this->handler.frame().control_frames.size()) {
+    throw WasmError("jump label exceeded the number of frames on the stack");
+  }
+
+  if(this->handler.frame().control_frames.size() <= 0) {
+    throw WasmError("expected at least one item on the stack");
+  }
+
+  auto &control_frames = this->handler.frame().control_frames;
+  for(size_t depth = 0; depth < imm.unsigned_value; depth++) {
+    control_frames.pop();
+  }
+  ControlFrame frame = control_frames.top();
+
+  if(frame.kind == ControlFrameKind::Loop) {
+    this->pc() = frame.start_pc;
+  }else {
     this->pc() = frame.end_pc;
   }
-  this->stack().pop();
-  return should_advance;
+
+  return false;
 }
 
 void Interpreter::handle_if_block(Immediate imm) {
   // evaluate the condition at the top of the stack
   if(this->stack().size() <= 0) {
-    throw WasmError("expected something on the stack");
+    throw WasmError("if block expected something on the stack");
   }
+
   Immediate val = this->stack().top();
   this->stack().pop();
   if(val.type != WASM_TYPE_I32) {
     throw WasmError("expected a i32 but got something else");
   }
-  auto &control_frame = this->handler.frame().control_frames.top();
 
+  auto &pc_mappings = this->handler.pc_mappings();
+  auto frame_it = pc_mappings.find(this->pc());
+  if(frame_it == pc_mappings.end()) {
+    throw WasmError("if block control frame missing");
+  }
+  
+  size_t new_pc = this->pc();
+  auto &control_frame = frame_it->second;
   if(val.signed_value != 0) {
-    this->pc() = this->pc()+1;
+    new_pc = this->pc()+1;
   }else {
-    size_t new_pc = this->pc();
     if(control_frame.else_pc != 0) {
       // we don't execute the else branch,  it's a marker to handle reaching the end of `then`
       new_pc = control_frame.else_pc + 1;
@@ -511,17 +551,31 @@ void Interpreter::handle_if_block(Immediate imm) {
     }else {
       throw WasmError("expected else or end pc to be non-zero");
     }
-    this->pc() = new_pc;
   }
+
+  this->enter_control_frame(ControlFrameKind::If, imm);
+  this->pc() = new_pc;
 }
 
 // we only execute this if we just finished up executing a
 // then, this actually means we never hit the else block
 void Interpreter::handle_else_block(Immediate imm) {
   // kinda the same exact code as for handle_br_if?
+  auto &control_frame = this->handler.frame().control_frames.top();
+  this->pc() = control_frame.end_pc;
 }
 
 void Interpreter::handle_loop_block(Immediate imm) {
+  if(this->handler.frame().control_frames.size() <= 0) {
+    // first time we encountered this
+    this->enter_control_frame(ControlFrameKind::Loop, imm);
+  }else {
+    // second time, this is the validation phase
+    auto &cframe = this->handler.frame().control_frames.top();
+    if(cframe.kind != ControlFrameKind::Loop || cframe.start_pc != this->pc()) {
+      throw WasmError("control frames were corrupted");
+    }
+  }
 }
 
 void Interpreter::handle_i32_eqz() {
@@ -535,6 +589,23 @@ void Interpreter::handle_i32_eqz() {
   this->stack().pop();
   if(val.signed_value == 0) {
     this->stack().push(Immediate(int32_t(1)));
+  }else {
+    this->stack().push(Immediate(int32_t(0)));
+  }
+}
+
+void Interpreter::handle_i32_eq() {
+  if(this->stack().size() <= 1) {
+    throw WasmError("was unable to pop");
+  }
+  auto first = this->stack().top();
+  this->stack().pop();
+  auto second = this->stack().top();
+  this->stack().pop();
+  if(first.signed_value == second.signed_value) {
+    this->stack().push(Immediate(int32_t(1)));
+  }else {
+    this->stack().push(Immediate(int32_t(0)));
   }
 }
 
@@ -542,9 +613,15 @@ StepResult Interpreter::run_step(FuncDecl *f,
       const std::vector<Instruction> &instructions,
       const std::vector<Immediate> &args
     ) {
+
+  if(this->pc() + 1 == instructions.size()) {
+    return StepResult::FunctionEnd;
+  }
+
   StepResult res = StepResult::Continue;
   bool should_advance = true;
-    
+
+  
   Instruction instr = instructions[this->pc()];
   switch(instr.opcode) {
     case WASM_OP_CALL:
@@ -589,6 +666,9 @@ StepResult Interpreter::run_step(FuncDecl *f,
       return StepResult::Return;
     case WASM_OP_I32_EQZ:
       this->handle_i32_eqz();
+      break;
+    case WASM_OP_I32_EQ:
+      this->handle_i32_eq();
       break;
     default:
       std::printf("0x%0x not supported\n", instr.opcode);
@@ -724,7 +804,7 @@ void Interpreter::run_main() {
   for(auto const &p: f->sig->params) {
     switch(p) {
       case WASM_TYPE_I32:
-        params.push_back(Immediate(static_cast<int32_t>(1)));
+        params.push_back(Immediate(static_cast<int32_t>(0)));
         break;
       case WASM_TYPE_I64:
         params.push_back(Immediate(static_cast<int64_t>(42)));
@@ -806,17 +886,6 @@ size_t &ControlHandler::pc() {
 
 std::map<size_t, ControlFrame> &ControlHandler::pc_mappings() {
   return this->frames.back().operand_pc_mappings();
-}
-
-void ControlHandler::block_frame(ControlFrameKind kind) {
-}
-
-void ControlHandler::if_frame() {
-
-}
-
-void ControlHandler::loop_frame() {
-
 }
 
 std::vector<Immediate> ControlHandler::enter_function(SigDecl *decl) {

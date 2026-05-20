@@ -153,12 +153,35 @@ typedef struct {
   int               invalid;
 } opcode_entry_t;
 
-/* Defined in C file so we can use designated initializers */
+/* Dense remap of WASM opcodes. The raw opcode values in wasmops.h encode the
+ * prefix and sub-opcode as a packed byte sequence (e.g. SIMD 3-byte form
+ * 0xFDxx01), which would size the table at ~16M entries (~254 MB). OP_IDX
+ * collapses those values into a 1280-entry layout:
+ *   0x000-0x0FF : single-byte opcodes
+ *   0x100-0x1FF : 0xFB-prefix (reserved)
+ *   0x200-0x2FF : 0xFC-prefix
+ *   0x300-0x3FF : 0xFD-prefix (SIMD; both 2-byte sub<128 and 3-byte sub>=128)
+ *   0x400-0x4FF : 0xFE-prefix
+ *
+ * For SIMD, the 2-byte runtime form uses the actual sub-opcode in the low
+ * byte, and the 3-byte header form encodes the same sub-opcode in its middle
+ * byte (the LEB continuation byte has the high bit set, so the byte equals
+ * the sub-opcode value). Both map to the same dense slot. */
+#define OPCODE_TABLE_SIZE 0x500u
+
+#define OP_IDX(op) \
+  ( (uint32_t)(op) < 0x100u ? (uint32_t)(op) : \
+    ((uint32_t)(op) >> 16) == 0u ? \
+      (0x100u + ((((uint32_t)(op) >> 8) & 0xFFu) - 0xFBu) * 0x100u + ((uint32_t)(op) & 0xFFu)) : \
+    ((uint32_t)(op) >> 16) == 0xFDu && ((uint32_t)(op) & 0xFFu) == 0x01u ? \
+      (0x100u + (0xFDu - 0xFBu) * 0x100u + (((uint32_t)(op) >> 8) & 0xFFu)) : \
+    0xFFu )
+
 #ifdef __cplusplus
 extern "C" {
 #endif
-extern opcode_entry_t opcode_table[];
-extern bool legal_opcodes_table[];
+extern opcode_entry_t opcode_table[OPCODE_TABLE_SIZE];
+extern bool legal_opcodes_table[OPCODE_TABLE_SIZE];
 #ifdef __cplusplus
 }
 #endif
