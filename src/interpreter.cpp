@@ -2,8 +2,13 @@
 #include <array>
 #include <iostream>
 #include <cstring>
+#include <random>
+#include <sstream>
 #include <stdexcept>
 #include <vector>
+
+#include <spdlog/spdlog.h>
+#include <spdlog/sinks/basic_file_sink.h>
 
 #include "errors.h"
 #include "interpreter.h"
@@ -90,6 +95,20 @@ bool is_valtype_byte(byte b) {
       return false;
   }
   return false;
+}
+
+std::string random_hex_token() {
+  std::random_device rd;
+  std::mt19937_64 gen(rd());
+  std::uniform_int_distribution<uint64_t> dist;
+
+  std::ostringstream os;
+  os << std::hex << dist(gen);
+  return os.str();
+}
+
+std::string random_log_filename() {
+  return "wasm-interpreter-" + random_hex_token() + ".log";
 }
 
 Opcode_t read_opcode(const bytearr& code, size_t& pos) {
@@ -230,7 +249,9 @@ void parse_immediate(Immediate& imm, const bytearr& code, size_t& pos) {
 }  // namespace
 
 
-Interpreter::Interpreter(WasmModule mod) {
+Interpreter::Interpreter(WasmModule mod)
+    : logger(spdlog::basic_logger_mt("interpreter-" + random_hex_token(),
+                                     random_log_filename())) {
   this->mod = mod;
   for(auto const &f: mod.Funcs()) {
     this->push_func(f);
@@ -611,9 +632,8 @@ void Interpreter::handle_i32_eq() {
 
 StepResult Interpreter::run_step(FuncDecl *f,
       const std::vector<Instruction> &instructions,
-      const std::vector<Immediate> &args
+      std::vector<Immediate> &args
     ) {
-
   if(this->pc() + 1 == instructions.size()) {
     return StepResult::FunctionEnd;
   }
@@ -736,7 +756,7 @@ void Interpreter::exit_function(FuncDecl *f) {
   }
 
   SigDecl *decl = f->sig;
-  StackFrame &callee_frame = this->handler.frames.back();
+  StackFrame &callee_frame = this->handler.frames.top();
   std::vector<Immediate> results;
 
   if(decl != nullptr) {
@@ -763,14 +783,36 @@ void Interpreter::exit_function(FuncDecl *f) {
     return;
   }
 
-  this->handler.frames.pop_back();
-  StackFrame &caller_frame = this->handler.frames.back();
+  this->handler.frames.pop();
+  StackFrame &caller_frame = this->handler.frames.top();
   for(auto result = results.rbegin(); result != results.rend(); ++result) {
     caller_frame.stack.push(*result);
   }
 }
 
 void Interpreter::run_function(FuncDecl *f, std::vector<Immediate> args) {
+  for(auto const& group: f->pure_locals) {
+    for(size_t i=0; i < group.count; i++) {
+      switch(group.type) {
+      case WASM_TYPE_I32:
+        args.push_back(Immediate(static_cast<int32_t>(0)));
+        break;
+      case WASM_TYPE_I64:
+        args.push_back(Immediate(static_cast<int64_t>(42)));
+        break;
+      case WASM_TYPE_F32:
+        args.push_back(Immediate(static_cast<float>(0.41)));
+        break;
+      case WASM_TYPE_F64:
+        args.push_back(Immediate(static_cast<double>(0.82)));
+        break;
+      default:
+        std::cout << "unsupported type" << std::endl;
+        return;
+      }
+    }
+  }
+  
   std::vector<Instruction> instructions = this->parse_function(f);
   this->handler.pc_mappings() = preparse(instructions);
   this->pc() = 0;
@@ -863,7 +905,7 @@ std::map<size_t, ControlFrame> &StackFrame::operand_pc_mappings() {
 }
 
 ControlHandler::ControlHandler() {
-  this->frames.push_front(StackFrame());
+  this->frames.push(StackFrame());
 }
 
 ControlHandler::~ControlHandler() {
@@ -874,18 +916,18 @@ StackFrame &ControlHandler::frame() {
   if(this->frames.empty()) {
     throw WasmStackUnderflowTrap("no active stack frame");
   }
-  return this->frames.back();
+  return this->frames.top();
 }
 
 size_t &ControlHandler::pc() {
   if(this->frames.empty()) {
     throw WasmStackUnderflowTrap("no active stack frame");
   }
-  return this->frames.back().operand_pc();
+  return this->frames.top().operand_pc();
 }
 
 std::map<size_t, ControlFrame> &ControlHandler::pc_mappings() {
-  return this->frames.back().operand_pc_mappings();
+  return this->frames.top().operand_pc_mappings();
 }
 
 std::vector<Immediate> ControlHandler::enter_function(SigDecl *decl) {
@@ -895,7 +937,7 @@ std::vector<Immediate> ControlHandler::enter_function(SigDecl *decl) {
     throw WasmError("the function signature expects args the stack frame size is zero, there is nothing to peek at");
   }
 
-  StackFrame &caller_frame = this->frames.back();
+  StackFrame &caller_frame = this->frames.top();
 
   if(decl->params.size() > caller_frame.stack.size()) {
     throw WasmError("params were not received in callee's stack");
@@ -914,6 +956,6 @@ std::vector<Immediate> ControlHandler::enter_function(SigDecl *decl) {
       args.push_back(imm);
     }
   }
-  this->frames.push_back(callee_frame);
+  this->frames.push(callee_frame);
   return args;
 }

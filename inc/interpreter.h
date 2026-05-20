@@ -1,8 +1,13 @@
 #pragma once
 #include <stack>
 #include <map>
-#include <deque>
+#include <memory>
+#include <vector>
 #include "ir.h"
+
+namespace spdlog {
+class logger;
+}
 
 enum class StepResult {
   Continue,
@@ -68,7 +73,7 @@ class StackFrame {
 
 class ControlHandler {
   private:
-    std::deque<StackFrame> frames;
+    std::stack<StackFrame, std::vector<StackFrame>> frames;
   public:
     StackFrame &frame();
     size_t &pc();
@@ -82,6 +87,7 @@ class ControlHandler {
 class Interpreter {
   private:
     ControlHandler handler;
+    std::shared_ptr<spdlog::logger> logger;
 
     WasmModule mod;
     std::vector<TableDecl> tables;
@@ -106,7 +112,7 @@ class Interpreter {
     void handle_i32_eqz();
     void handle_i32_eq();
     void enter_control_frame(ControlFrameKind kind, Immediate imm);
-    StepResult run_step(FuncDecl *f, const std::vector<Instruction> &instructions, const std::vector<Immediate> &args);
+    StepResult run_step(FuncDecl *f, const std::vector<Instruction> &instructions, std::vector<Immediate> &args);
     std::stack<Immediate> &stack();
     size_t &pc();
   public:
