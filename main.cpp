@@ -12,6 +12,7 @@
 
 static struct option long_options[] = {
   {"trace", no_argument,  &g_trace, 1},
+  {"file-log", no_argument, NULL, 'l'},
   {"args", optional_argument, NULL, 'a'},
   {"help", no_argument, NULL, 'h'}
 };
@@ -19,15 +20,19 @@ static struct option long_options[] = {
 typedef struct args_t {
   std::string infile;
   std::vector<std::string> mainargs;
+  bool file_logging = false;
 } args_t;
 
 args_t parse_args(int argc, char* argv[]) {
   int opt;
   args_t args;
   optind = 0;
-  while ((opt = getopt_long_only(argc, argv, ":a:h", long_options, NULL)) != -1) {
+  while ((opt = getopt_long_only(argc, argv, ":a:lh", long_options, NULL)) != -1) {
     switch(opt) {
       case 0: break;
+      case 'l':
+        args.file_logging = true;
+        break;
       case 'a':
         args.mainargs.push_back(optarg);
         while ((optind < (argc - 1))) {
@@ -36,7 +41,7 @@ args_t parse_args(int argc, char* argv[]) {
         break;
       case 'h':
       default:
-        ERR("Usage: %s [--trace (optional)] [-a <space-separated args>] <input-file>\n", argv[0]);
+        ERR("Usage: %s [--trace] [--file-log] [-a <space-separated args>] <input-file>\n", argv[0]);
         exit(opt != 'h');
     }
   }
@@ -74,7 +79,7 @@ int main(int argc, char *argv[]) {
   /* */
 
   // dump_module(mod);
-  Interpreter interpreter = Interpreter(mod);
+  Interpreter interpreter = Interpreter(mod, args.file_logging);
   interpreter.run_main();
   interpreter.dump_stack();
 
@@ -82,6 +87,5 @@ int main(int argc, char *argv[]) {
 
   return 0;
 }
-
 
 
