@@ -570,6 +570,36 @@ bool Interpreter::handle_br(Immediate imm) {
   return false;
 }
 
+void Interpreter::handle_br_table(Immediate imm) {
+  if(this->stack().size() <= 0) {
+    throw WasmError("needed at least one item on the stack");
+  }
+  Immediate val = this->stack().top();
+  this->stack().pop();
+  
+  size_t jump_depth = imm.br_table.default_label;
+  if(val.signed_value < imm.br_table.labels.size()) {
+    jump_depth = imm.br_table.labels[val.signed_value];
+  }
+
+  if(this->handler.frame().control_frames.size() <= 0) {
+    throw WasmError("expected at least one item on the stack");
+  }
+
+  auto &control_frames = this->handler.frame().control_frames;
+  for(size_t depth = 0; depth < jump_depth; depth++) {
+    control_frames.pop();
+  }
+
+  ControlFrame frame = control_frames.top();
+  if(frame.kind == ControlFrameKind::Loop) {
+    // skip the loop since we already inserted it into the control frames
+    this->pc() = frame.start_pc + 1;
+  }else {
+    this->pc() = frame.end_pc;
+  }
+}
+
 void Interpreter::handle_if_block(Immediate imm) {
   // evaluate the condition at the top of the stack
   if(this->stack().size() <= 0) {
@@ -720,6 +750,10 @@ StepResult Interpreter::run_step(FuncDecl *f,
     case WASM_OP_BR_IF:
       should_advance = this->handle_br_if(instr.imm);
       res = StepResult::Continue;
+      break;
+    case WASM_OP_BR_TABLE:
+      this->handle_br_table(instr.imm);
+      should_advance = false;
       break;
     case WASM_OP_END:
       // only handle the non function ends
@@ -917,7 +951,7 @@ void Interpreter::run_main() {
   for(auto const &p: f->sig->params) {
     switch(p) {
       case WASM_TYPE_I32:
-        params.push_back(Immediate(static_cast<int32_t>(0)));
+        params.push_back(Immediate(static_cast<int32_t>(9)));
         break;
       case WASM_TYPE_I64:
         params.push_back(Immediate(static_cast<int64_t>(42)));

@@ -105,6 +105,7 @@ class Interpreter {
     void handle_end();
     bool handle_br_if(Immediate imm);
     bool handle_br(Immediate imm);
+    void handle_br_table(Immediate imm);
     void handle_return(FuncDecl *f);
     void exit_function(FuncDecl *f);
     void handle_if_block(Immediate imm);
