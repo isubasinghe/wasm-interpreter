@@ -9,6 +9,7 @@
 
 #include <spdlog/spdlog.h>
 #include <spdlog/sinks/basic_file_sink.h>
+#include <spdlog/sinks/stdout_sinks.h>
 
 #include "errors.h"
 #include "interpreter.h"
@@ -109,6 +110,14 @@ std::string random_hex_token() {
 
 std::string random_log_filename() {
   return "wasm-interpreter-" + random_hex_token() + ".log";
+}
+
+std::shared_ptr<spdlog::logger> make_interpreter_logger(bool file_logging) {
+  std::string name = "interpreter-" + random_hex_token();
+  if (file_logging) {
+    return spdlog::basic_logger_mt(name, random_log_filename());
+  }
+  return spdlog::stdout_logger_mt(name);
 }
 
 Opcode_t read_opcode(const bytearr& code, size_t& pos) {
@@ -249,9 +258,8 @@ void parse_immediate(Immediate& imm, const bytearr& code, size_t& pos) {
 }  // namespace
 
 
-Interpreter::Interpreter(WasmModule mod)
-    : logger(spdlog::basic_logger_mt("interpreter-" + random_hex_token(),
-                                     random_log_filename())) {
+Interpreter::Interpreter(WasmModule mod, bool file_logging)
+    : logger(make_interpreter_logger(file_logging)) {
   this->mod = mod;
   for(auto const &f: mod.Funcs()) {
     this->push_func(f);
@@ -346,7 +354,7 @@ static Immediate similar_cast(Immediate imm, Immediate other) {
   throw WasmTypeMismatchTrap("operand type mismatch");
 }
 
-void Interpreter::handle_local_get(Immediate imm, std::vector<Immediate> args) {
+void Interpreter::handle_local_get(Immediate imm, const std::vector<Immediate> &args) {
   if(imm.kind != IMM_LOCAL) {
     throw WasmInvalidImmediateError("local.get immediate must be a local index");
   }
@@ -355,6 +363,25 @@ void Interpreter::handle_local_get(Immediate imm, std::vector<Immediate> args) {
                                 std::to_string(imm.unsigned_value));
   }
   this->stack().push(args[imm.unsigned_value]);
+}
+
+void Interpreter::handle_local_set(Immediate imm, std::vector<Immediate> &args) {
+  if(imm.kind != IMM_LOCAL) {
+    throw WasmError("expected label");
+  }
+
+  if(this->stack().size() <= 0) {
+    throw WasmError("expected an item on the stack");
+  }
+
+  if(imm.unsigned_value >= args.size()) {
+    throw WasmError("out of bounds access");
+  }
+
+  Immediate val = this->stack().top();
+  this->stack().pop();
+
+  args[imm.unsigned_value] = val;
 }
 
 void Interpreter::handle_f64_add() {
@@ -497,15 +524,16 @@ bool Interpreter::handle_br_if(Immediate imm) {
     should_advance = false;
   }
 
-  auto &control_frames = this->handler.frame().control_frames;
-  for(size_t depth = 0; depth < imm.unsigned_value; depth++) {
-    control_frames.pop();
-  }
-  ControlFrame frame = control_frames.top();
-
   if(!should_advance) {
+    auto &control_frames = this->handler.frame().control_frames;
+    for(size_t depth = 0; depth < imm.unsigned_value; depth++) {
+      control_frames.pop();
+    }
+    ControlFrame frame = control_frames.top();
+
     if(frame.kind == ControlFrameKind::Loop) {
-      this->pc() = frame.start_pc;
+      // skip the control frame entering logic by skipping directly to the next executing instr
+      this->pc() = frame.start_pc + 1;
     }else {
       this->pc() = frame.end_pc;
     }
@@ -530,10 +558,11 @@ bool Interpreter::handle_br(Immediate imm) {
   for(size_t depth = 0; depth < imm.unsigned_value; depth++) {
     control_frames.pop();
   }
-  ControlFrame frame = control_frames.top();
 
+  ControlFrame frame = control_frames.top();
   if(frame.kind == ControlFrameKind::Loop) {
-    this->pc() = frame.start_pc;
+    // skip the loop since we already inserted it into the control frames
+    this->pc() = frame.start_pc + 1;
   }else {
     this->pc() = frame.end_pc;
   }
@@ -587,16 +616,7 @@ void Interpreter::handle_else_block(Immediate imm) {
 }
 
 void Interpreter::handle_loop_block(Immediate imm) {
-  if(this->handler.frame().control_frames.size() <= 0) {
-    // first time we encountered this
-    this->enter_control_frame(ControlFrameKind::Loop, imm);
-  }else {
-    // second time, this is the validation phase
-    auto &cframe = this->handler.frame().control_frames.top();
-    if(cframe.kind != ControlFrameKind::Loop || cframe.start_pc != this->pc()) {
-      throw WasmError("control frames were corrupted");
-    }
-  }
+  this->enter_control_frame(ControlFrameKind::Loop, imm);
 }
 
 void Interpreter::handle_i32_eqz() {
@@ -630,6 +650,39 @@ void Interpreter::handle_i32_eq() {
   }
 }
 
+void Interpreter::handle_i32_add() {
+  if(this->stack().size() <= 1) {
+    throw WasmError("was unable to pop two items");
+  }
+
+  Immediate first = this->stack().top();
+  this->stack().pop();
+  Immediate second = this->stack().top();
+  this->stack().pop();
+  
+  if(first.type != WASM_TYPE_I32 || first.type != second.type) {
+    throw WasmError("expected type i32 for both operands");
+  }
+  this->stack().push(Immediate(int32_t(first.signed_value + second.signed_value)));
+}
+
+void Interpreter::handle_i32_sub() {
+  if(this->stack().size() <= 1) {
+    throw WasmError("was unable to pop two items");
+  }
+
+  Immediate first = this->stack().top();
+  this->stack().pop();
+  Immediate second = this->stack().top();
+  this->stack().pop();
+  
+  if(first.type != WASM_TYPE_I32 || first.type != second.type) {
+    throw WasmError("expected type i32 for both operands");
+  }
+  this->stack().push(Immediate(int32_t(second.signed_value - first.signed_value)));
+}
+
+
 StepResult Interpreter::run_step(FuncDecl *f,
       const std::vector<Instruction> &instructions,
       std::vector<Immediate> &args
@@ -640,8 +693,9 @@ StepResult Interpreter::run_step(FuncDecl *f,
 
   StepResult res = StepResult::Continue;
   bool should_advance = true;
+  std::cout << "at: " << this->pc() << std::endl;
+  std::cout << "stack size: " << this->stack().size() << std::endl;
 
-  
   Instruction instr = instructions[this->pc()];
   switch(instr.opcode) {
     case WASM_OP_CALL:
@@ -677,6 +731,12 @@ StepResult Interpreter::run_step(FuncDecl *f,
       this->handle_if_block(instr.imm);
       should_advance = false;
       break;
+    case WASM_OP_LOCAL_SET:
+      this->handle_local_set(instr.imm, args);
+      break;
+    case WASM_OP_LOOP:
+      this->handle_loop_block(instr.imm);
+      break;
     case WASM_OP_ELSE:
       this->handle_else_block(instr.imm);
       should_advance = false;
@@ -690,8 +750,19 @@ StepResult Interpreter::run_step(FuncDecl *f,
     case WASM_OP_I32_EQ:
       this->handle_i32_eq();
       break;
+    case WASM_OP_I32_ADD:
+      this->handle_i32_add();
+      break;
+    case WASM_OP_I32_SUB:
+      this->handle_i32_sub();
+      break;
+    case WASM_OP_BR:
+      should_advance = this->handle_br(instr.imm);
+      break;
     default:
       std::printf("0x%0x not supported\n", instr.opcode);
+      throw WasmError("unsupported op code");
+      break;
   }
   this->pc() = this->pc() + (1 & should_advance);
   return res;

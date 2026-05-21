@@ -97,7 +97,8 @@ class Interpreter {
     void add_table(TableDecl t);
     void handle_call(uint32_t fn_idx);
     void handle_indirect_call(Immediate imm);
-    void handle_local_get(Immediate imm, std::vector<Immediate> args);
+    void handle_local_get(Immediate imm, const std::vector<Immediate> &args);
+    void handle_local_set(Immediate imm, std::vector<Immediate> &args);
     void run_function(FuncDecl *f, std::vector<Immediate> args);
     void handle_f64_add();
     void handle_block(Immediate imm);
@@ -111,13 +112,15 @@ class Interpreter {
     void handle_loop_block(Immediate imm);
     void handle_i32_eqz();
     void handle_i32_eq();
+    void handle_i32_add();
+    void handle_i32_sub();
     void enter_control_frame(ControlFrameKind kind, Immediate imm);
     StepResult run_step(FuncDecl *f, const std::vector<Instruction> &instructions, std::vector<Immediate> &args);
     std::stack<Immediate> &stack();
     size_t &pc();
   public:
 
-    Interpreter(WasmModule mod);
+    Interpreter(WasmModule mod, bool file_logging = false);
     ~Interpreter();
     std::vector<Instruction> parse_function(const FuncDecl *f);
     void run_function(int index, std::vector<Immediate> args);
