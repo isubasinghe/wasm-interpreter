@@ -84,13 +84,25 @@ class ControlHandler {
     friend class Interpreter;
 };
 
+class Tables {
+  private:
+    std::vector<TableDecl> tables;
+    std::vector<std::map<size_t, size_t>> refs;
+  public:
+    Tables();
+    ~Tables();
+    void add_table(TableDecl t);
+    void set_elem(size_t table_idx, size_t table_inner_idx, size_t fn_idx);
+    size_t get_elem(size_t table_idx, size_t table_inner_idx);
+};
+
 class Interpreter {
   private:
     ControlHandler handler;
     std::shared_ptr<spdlog::logger> logger;
 
     WasmModule mod;
-    std::vector<TableDecl> tables;
+    Tables tables;
     std::map<uint32_t, std::map<uint32_t, bool>> mapped;
     std::vector<FuncDecl> functions;
     void push_func(FuncDecl f);

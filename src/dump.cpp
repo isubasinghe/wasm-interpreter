@@ -252,13 +252,6 @@ void disassemble(std::ostream& os, const bytearr& code, int base_indent) {
   }
 }
 
-void emit_typelist(std::ostream& os, const char* tag, const typelist& ts) {
-  if (ts.empty()) return;
-  os << " (" << tag;
-  for (auto t : ts) os << ' ' << t;
-  os << ')';
-}
-
 }  // namespace
 
 std::ostream& operator<<(std::ostream& os, const wasm_limits_t& l) {

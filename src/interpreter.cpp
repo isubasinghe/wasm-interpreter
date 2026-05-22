@@ -264,27 +264,18 @@ Interpreter::Interpreter(WasmModule mod, bool file_logging)
   for(auto const &f: mod.Funcs()) {
     this->push_func(f);
   }
-  
-  for(auto const &d: mod.Datas()) {
-  }
-
-  for(auto const &c: mod.Customs()) {
-  }
-
-  for(auto const &s: mod.Sigs()) {
-  }
-
-  for(auto const &e: mod.Elems()) {
-  }
-
-  for(auto const &g: mod.Globals()) {
-  }
 
   for(auto const &t: mod.Tables()) {
     this->add_table(t);
   }
 
-  for(auto const &d: mod.Datas()) {
+  for(auto const &e: mod.Elems()) {
+    size_t offset = e.table_offset;
+    auto i = 0;
+    for(auto &f: e.func_indices) {
+      this->tables.set_elem(0, offset+i, mod.getFuncIdx(f));
+      i++;
+    }
   }
 }
 
@@ -293,7 +284,7 @@ Interpreter::~Interpreter() {
 }
 
 void Interpreter::add_table(TableDecl t) {
-  this->tables.push_back(t);
+  this->tables.add_table(t);
 }
 
 void Interpreter::push_func(FuncDecl f) {
@@ -328,31 +319,28 @@ void Interpreter::handle_call(uint32_t fn_idx) {
   this->exit_function(&function);
 }
 
+void type_check(std::list<wasm_type_t> first, std::list<wasm_type_t> second) {
+
+}
+
 void Interpreter::handle_indirect_call(Immediate imm) {
   if(imm.kind != IMM_SIG_TABLE) {
     throw WasmInvalidImmediateError("call_indirect immediate must be a signature/table pair");
   }
+  if(this->stack().size() <= 0) {
+    throw WasmError("expected an element at least on the stack");
+  } 
+  Immediate elem = this->stack().top();
+  this->stack().pop();
 
-  if(!this->mapped.contains(imm.unsigned_value)) {
-    throw WasmInvalidIndexError("call_indirect type index is unmapped: " +
-                                std::to_string(imm.unsigned_value));
+  if(imm.type != WASM_TYPE_I32) {
+    throw WasmError("expected i32");
   }
-  auto map = this->mapped[imm.unsigned_value];
-  if(map[imm.unsigned_value2] == false) {
-    throw WasmInvalidIndexError("call_indirect table index is unmapped: " +
-                                std::to_string(imm.unsigned_value2));
-  }
-  throw WasmUnsupportedOpcodeError(WASM_OP_CALL_INDIRECT);
-  // TODO: handle this
+
+  auto fn_idx = this->tables.get_elem(imm.unsigned_value2, elem.unsigned_value);
+  this->handle_call(fn_idx);  
 }
 
-static Immediate similar_cast(Immediate imm, Immediate other) {
-  if(imm.type == other.type) {
-    return other;
-  }
-  std::cerr << imm.type << " != " << other.type << std::endl;
-  throw WasmTypeMismatchTrap("operand type mismatch");
-}
 
 void Interpreter::handle_local_get(Immediate imm, const std::vector<Immediate> &args) {
   if(imm.kind != IMM_LOCAL) {
@@ -1063,4 +1051,35 @@ std::vector<Immediate> ControlHandler::enter_function(SigDecl *decl) {
   }
   this->frames.push(callee_frame);
   return args;
+}
+
+
+Tables::Tables() {
+}
+
+Tables::~Tables() {
+}
+
+void Tables::add_table(TableDecl t) {
+  this->tables.push_back(t);
+  std::map<size_t, size_t> refs;
+  this->refs.push_back(refs);
+}
+
+void Tables::set_elem(size_t table_idx, size_t table_inner_idx, size_t fn_idx) {
+  if(table_idx >= this->refs.size()) {
+    throw WasmError("no tables at table_idx");
+  }
+  auto &m = this->refs[table_idx];
+  m[table_inner_idx] = fn_idx;
+}
+
+size_t Tables::get_elem(size_t table_idx, size_t table_inner_idx) {
+  if(table_idx >= this->refs.size()) {
+    throw WasmError("no tables at table_idx");
+  }
+  if(table_inner_idx >= this->refs[table_idx].size()) {
+    throw WasmError("no tables at table_inner_idx");
+  }
+  return this->refs[table_idx][table_inner_idx];
 }
