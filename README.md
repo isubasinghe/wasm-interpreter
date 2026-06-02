@@ -1,57 +1,83 @@
-# Project 1: WASM Interpreter
+# wasm-vm
 
-This repo contains starter code (in C++) for building up a wasm interpreter. 
-You are not required to use C++ or any part of this starter code for the project, but it 
-will simplify many tasks for you.
+An independent WebAssembly bytecode interpreter written in C++20.
 
-Create a [private fork of the public repo](https://gist.github.com/0xjac/85097472043b697ab57ba1b1c7530274) 
-when working on your solution
+This project began life as the starter code for [CMU's 17-770 compilers course (Project 1)](https://www.cs.cmu.edu/~btitzer/cs17-770/fall2024/proj1.html), but it has since grown well past the assignment into a standalone Wasm runtime and a personal learning platform for exploring interpreter and compiler internals. The current focus is on adding a **JIT compiler** alongside the existing tree-walking interpreter.
 
-The project description and specifications of Project 1 can be found at the website [here](https://www.cs.cmu.edu/~btitzer/cs17-770/fall2024/proj1.html).
+The core [WebAssembly specification](https://webassembly.github.io/spec/core/intro/index.html) is the reference of record for the implementation.
 
-The core [WebAssembly spec](https://webassembly.github.io/spec/core/intro/index.html) is a valuable reference resource for implementation.
+## Status
 
+| Component | State |
+|-----------|-------|
+| Binary parser → `WasmModule` IR | working |
+| Stack-based interpreter | working (incl. `br_table`, `call_indirect`) |
+| Validator | in progress |
+| JIT compiler | planned (using [xbyak](https://github.com/herumi/xbyak)) |
 
-## Starter Code Structure
-`main.cpp` serves as the entry-point that invokes the parser and interpreter.
-We have provided you a parser that ingests a Wasm binary and produces a `WasmModule` instance that encapsulates the 
-static state of the module (see [here](inc/ir.h)).
-Your goal is to then construct dynamic state and the interpreter loop required to execute the binary.
+## Layout
 
-A [list of legal opcodes](src/opcode_table.c) is specified that your VM is required to interpret.
-We will not test you on any binaries outside of the subset enabled in the table.
+| Path | Purpose |
+|------|---------|
+| `main.cpp` | Entry point: parse args, load the binary, run the interpreter |
+| `inc/` | Public headers (`ir.h`, `parse.h`, `interpreter.h`, `validator.h`, `jit.h`, …) |
+| `src/parse.cpp` | Decodes a Wasm binary into a `WasmModule` (static module state) |
+| `src/interpreter.cpp` | The execution engine: dynamic state + the interpreter loop |
+| `src/validator.cpp` | Bytecode validation (WIP) |
+| `src/jit.cpp` | JIT backend (WIP) |
+| `src/opcode_table.c` | The set of opcodes the VM recognizes |
+| `inc/common.h` | Helpers, including LEB128 parsing |
+| `tests/` | Sample programs and fixtures |
+| `grade.sh` | Test harness / scoring script |
 
-Helper methods for LEB parsing are provided to you as well, see [inc/common.h](inc/common.h)
+## Building
 
-## Project Management
+The interpreter is C++20 and depends on [`spdlog`](https://github.com/gabime/spdlog) and [`fmt`](https://github.com/fmtlib/fmt). [`wabt`](https://github.com/WebAssembly/wabt) (`wat2wasm` / `wasm2wat`) is invaluable for inspecting and authoring test cases, and `clang` is used to compile the C test samples.
 
-### Prerequisites
-* Install the [WebAssembly Binary Toolkit](https://github.com/WebAssembly/wabt.git) from source or using `apt` on Linux.
-Ensure that the relevant binary directory is added to PATH.
-In particular, `wat2wasm` and `wasm2wat` will be very useful for you to inspect and modify test cases in text format.
-* `cmake` and `make` are required to build the interpreter. 
-* `clang` is required to build C test samples
+### CMake / Make
 
-### Build/Clean
-To build, run `make`.
+```sh
+make build        # configure + build into ./build, symlinks ./wasm-vm
+make build-tests  # build the test programs
+make run-tests    # build everything and run the grader
+make clean
+```
 
-To clean, run `make clean`
+### Nix
 
-While C/Make files may be modified,
-**please ensure we can still build and clean your project with the targets above**
+A `flake.nix` provides a reproducible dev shell with the full toolchain (cmake, clang, ccls, wabt, wasmtime, xbyak, spdlog, and a Shake-enabled GHC):
 
+```sh
+nix develop       # drop into the dev shell
+nix build         # build the wasm-vm package
+```
 
-### Tests
-We have provided some sample tests along with a build script to build.
-You will likely want to build upon the suite to test edge cases and more complex applications.
+### Shake (alternative)
 
-To build tests, run `make build-tests`.
+A Haskell [Shake](https://shakebuild.com/) build is also available:
 
-To run tests, run `make run-tests`. This will execute the grading script and give you a summary.
+```sh
+runghc Shakefile.hs        # build
+runghc Shakefile.hs tests  # build tests
+runghc Shakefile.hs test   # run the grader
+```
 
-## Notes
-* The entrypoint of the Wasm binary can be always be assumed to be an exported function named "main".
-* Feel free to modify the parser or `WasmModule` encoding if you wish
-* When printing f64 outputs, print them with precision of *6-digits after the decimal point*
-* Print all expected outputs (including *!trap*) to `stdout` only, and make sure `stderr` is empty for grading
-* You may add extra command line options if you wish, but we will only use '-a' for testing
+## Running
+
+```sh
+wasm-vm [--trace] [--file-log] [-a <space-separated args>] <input.wasm>
+```
+
+- `--trace` — emit an execution trace to `stderr`
+- `--file-log` — route logging to a file
+- `-a <args...>` — arguments passed to the program's `main`
+- The entry point is the exported function named `main`.
+
+## Conventions
+
+- `f64` outputs are printed with 6 digits after the decimal point.
+- Program output (including `!trap`) goes to `stdout`; `stderr` is kept clean.
+
+## Acknowledgements
+
+The original parser scaffolding and project framing came from CMU's 17-770 course materials. Everything beyond that — the interpreter, the validator, and the forthcoming JIT — is independent work.
