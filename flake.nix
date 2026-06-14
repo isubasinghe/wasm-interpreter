@@ -17,7 +17,7 @@
           version = "0.1.0";
           src = ./.;
           nativeBuildInputs = [ pkgs.cmake ];
-          buildInputs = [ pkgs.spdlog ];
+          buildInputs = [ pkgs.spdlog pkgs.xbyak pkgs.doctest ];
           installPhase = ''
             runHook preInstall
             mkdir -p $out/bin
@@ -37,6 +37,7 @@
             wasmtime
             xbyak
             spdlog
+            doctest
             ghcWithShake
           ];
           shellHook = ''

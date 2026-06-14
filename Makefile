@@ -1,4 +1,4 @@
-.PHONY: build build-tests run-tests clean
+.PHONY: build build-tests run-tests run-jit-tests clean
 
 build:
 	cmake -B build
@@ -10,7 +10,9 @@ build-tests:
 run-tests: build build-tests
 	./grade.sh
 
+run-jit-tests: build
+	ctest --test-dir build --output-on-failure -R jit_test
+
 clean:
 	rm -r build
 	make -C tests clean
-
