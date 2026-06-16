@@ -2,10 +2,12 @@
 
 #include "ir.h"
 #include "wasmdefs.h"
+#include "vecmap.h"
 #include "xbyak/xbyak.h"
 
 #include <array>
 #include <cstdint>
+#include <filesystem>
 #include <functional>
 #include <map>
 #include <stack>
@@ -64,6 +66,32 @@ struct WasmStackFrame {
   std::stack<WasmControlFrame> control_frames;
 };
 
+struct WasmInstructionRange {
+  using const_iterator = std::vector<Instruction>::const_iterator;
+
+  const std::vector<Instruction> *instructions = nullptr;
+  size_t start_pc = 0;
+  size_t end_pc = 0;
+
+  const_iterator begin() const;
+  const_iterator end() const;
+  size_t size() const;
+  bool empty() const;
+};
+
+struct WasmIfBlockRanges {
+  WasmInstructionRange then_branch;
+  WasmInstructionRange else_branch;
+};
+
+struct WasmBlockRanges {
+  WasmInstructionRange body;
+};
+
+struct WasmLoopBlockRanges {
+  WasmInstructionRange body;
+};
+
 struct WasmJit: Xbyak::CodeGenerator {
   private:
     // r11 is reserved as a scratch register
@@ -77,11 +105,14 @@ struct WasmJit: Xbyak::CodeGenerator {
       {Xbyak::util::r9, RegState::Free},
       {Xbyak::util::r10, RegState::Free},
     }};
+    VecMap<uint32_t, VValue> locals;
+    std::vector<FuncDecl> functions;
     std::stack<VValue> stack;
     WasmStackFrame frame;
     WasmModule *mod = nullptr;
 
     void mark_reg_free(Xbyak::Reg64 free_reg);
+    void mark_reg_used(Xbyak::Reg64 used_reg);
 
   public:
     WasmJit() = default;
@@ -90,7 +121,7 @@ struct WasmJit: Xbyak::CodeGenerator {
     VValue consume_i32_reg();
     VReg produce_i32_reg();
     void emit_i32_const(int32_t value);
-    void emit_add_op();
+    void emit_i32_add();
     void emit_if_block(
       const std::function<void()> &emit_then_branch,
       const std::function<void()> &emit_else_branch
@@ -105,6 +136,32 @@ struct WasmJit: Xbyak::CodeGenerator {
     void emit_br();
     void emit_br_table();
     void emit_return_i32();
+    void emit_local_set();
+    void emit_local_get();
+    void emit_local_get(uint32_t local_idx);
+    void emit_function_prologue(uint32_t fn_idx);
+    void emit_function_epilogoue(uint32_t fn_idx);
+    void emit_function(uint32_t fn_idx);
+    void write_binary(const std::filesystem::path &path) const;
     void preparse(std::vector<Instruction> instructions);
+    const VecMap<uint32_t, VValue> &local_mappings() const;
     const std::map<size_t, WasmControlFrame> &pc_mappings() const;
+    const WasmControlFrame &control_frame_at(size_t pc) const;
+    WasmInstructionRange instruction_range(
+      const std::vector<Instruction> &instructions,
+      size_t start_pc,
+      size_t end_pc
+    ) const;
+    WasmIfBlockRanges if_block_ranges(
+      const std::vector<Instruction> &instructions,
+      const WasmControlFrame &control_frame
+    ) const;
+    WasmBlockRanges block_ranges(
+      const std::vector<Instruction> &instructions,
+      const WasmControlFrame &control_frame
+    ) const;
+    WasmLoopBlockRanges loop_block_ranges(
+      const std::vector<Instruction> &instructions,
+      const WasmControlFrame &control_frame
+    ) const;
 };

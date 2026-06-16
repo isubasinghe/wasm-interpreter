@@ -1,12 +1,26 @@
 #include "jit.h"
+#include "function_parser.h"
 #include "ir.h"
 
+#include <fstream>
 #include <stdexcept>
 #include <string>
 
 using namespace Xbyak;
 
 namespace {
+
+constexpr size_t kStaticFrameSize = 512;
+constexpr size_t kSlotSize = 8;
+
+const std::array<Xbyak::Reg64, 6> kIntegerArgRegs {{
+  Xbyak::util::rdi,
+  Xbyak::util::rsi,
+  Xbyak::util::rdx,
+  Xbyak::util::rcx,
+  Xbyak::util::r8,
+  Xbyak::util::r9,
+}};
 
 SigDecl block_sig_from_immediate(const Immediate &imm, WasmModule *mod) {
   if(imm.kind != IMM_BLOCKT) {
@@ -114,12 +128,32 @@ void apply_simple_stack_effect(const Instruction &instr, size_t &stack_height) {
 
 } // namespace
 
-WasmJit::WasmJit(WasmModule *mod): mod(mod) {}
+WasmJit::WasmJit(WasmModule *mod): mod(mod) {
+  if(mod != nullptr) {
+    for(const auto &func: mod->Funcs()) {
+      functions.push_back(func);
+    }
+  }
+}
 
 void WasmJit::mark_reg_free(Xbyak::Reg64 free_reg) {
+  for(const auto &[_, local]: locals) {
+    if(local.vreg.kind == VRegPhys && local.vreg.physreg == free_reg) {
+      return;
+    }
+  }
+
   for(auto &reg: registers) {
     if(reg.reg == free_reg) {
       reg.state = RegState::Free;
+    }
+  }
+}
+
+void WasmJit::mark_reg_used(Xbyak::Reg64 used_reg) {
+  for(auto &reg: registers) {
+    if(reg.reg == used_reg) {
+      reg.state = RegState::Used;
     }
   }
 }
@@ -159,7 +193,7 @@ void WasmJit::emit_i32_const(int32_t value) {
   });
 }
 
-void WasmJit::emit_add_op() {
+void WasmJit::emit_i32_add() {
   auto rhs = consume_i32_reg();
   auto lhs = consume_i32_reg();
   if(lhs.vreg.kind != VRegKind::VRegPhys || rhs.vreg.kind != VRegKind::VRegPhys) {
@@ -213,6 +247,28 @@ void WasmJit::emit_br() {
 }
 
 void WasmJit::emit_br_table() {
+}
+
+WasmInstructionRange::const_iterator WasmInstructionRange::begin() const {
+  if(instructions == nullptr) {
+    throw std::runtime_error("instruction range has no instruction vector");
+  }
+  return instructions->begin() + static_cast<std::vector<Instruction>::difference_type>(start_pc);
+}
+
+WasmInstructionRange::const_iterator WasmInstructionRange::end() const {
+  if(instructions == nullptr) {
+    throw std::runtime_error("instruction range has no instruction vector");
+  }
+  return instructions->begin() + static_cast<std::vector<Instruction>::difference_type>(end_pc);
+}
+
+size_t WasmInstructionRange::size() const {
+  return end_pc - start_pc;
+}
+
+bool WasmInstructionRange::empty() const {
+  return size() == 0;
 }
 
 void WasmJit::preparse(std::vector<Instruction> instructions) {
@@ -294,6 +350,221 @@ void WasmJit::emit_return_i32() {
   ret();
 }
 
+void WasmJit::emit_function_prologue(uint32_t fn_idx) {
+  if(fn_idx >= functions.size()) {
+    throw std::runtime_error("function index out of bounds: " + std::to_string(fn_idx));
+  }
+
+  locals.clear();
+  while(!stack.empty()) {
+    stack.pop();
+  }
+  for(auto &reg: registers) {
+    reg.state = RegState::Free;
+  }
+
+  auto const name = "func_" + std::to_string(fn_idx);
+  Xbyak::Label func_label;
+  L(func_label);
+  push(rbp);
+  mov(rbp, rsp);
+  sub(rsp, kStaticFrameSize);
+
+  const FuncDecl &func = functions[fn_idx];
+  uint32_t local_index = 0;
+
+  if(func.sig != nullptr) {
+    for(const auto param_type: func.sig->params) {
+      VReg local_vreg {
+        .kind = VRegSpilled,
+        .physreg = Xbyak::util::rax,
+        .stack_offset = 0,
+      };
+
+      if(local_index < kIntegerArgRegs.size()) {
+        const auto reg = kIntegerArgRegs[local_index];
+        local_vreg = VReg {
+          .kind = VRegPhys,
+          .physreg = reg,
+          .stack_offset = 0,
+        };
+        mark_reg_used(reg);
+      } else {
+        local_vreg.stack_offset =
+          static_cast<int64_t>(16 + (local_index - kIntegerArgRegs.size()) * kSlotSize);
+      }
+
+      locals.insert_or_assign(local_index, VValue {
+        .vreg = local_vreg,
+        .ty = param_type,
+      });
+      local_index++;
+    }
+  }
+
+  size_t frame_slot = 0;
+  for(const auto &group: func.pure_locals) {
+    for(uint32_t i = 0; i < group.count; i++) {
+      const size_t offset = (frame_slot + 1) * kSlotSize;
+      if(offset > kStaticFrameSize) {
+        throw std::runtime_error("jit static frame exhausted while mapping locals");
+      }
+
+      const auto stack_offset = -static_cast<int64_t>(offset);
+      locals.insert_or_assign(local_index, VValue {
+        .vreg = VReg {
+          .kind = VRegSpilled,
+          .physreg = Xbyak::util::rax,
+          .stack_offset = stack_offset,
+        },
+        .ty = group.type,
+      });
+      mov(qword[rbp + stack_offset], 0);
+
+      local_index++;
+      frame_slot++;
+    }
+  }
+}
+
+void WasmJit::emit_function_epilogoue(uint32_t fn_idx) {
+  mov(rsp, rbp);
+  pop(rbp);
+  ret();
+}
+
+
+void WasmJit::emit_function(uint32_t fn_idx) {
+  if(fn_idx >= functions.size()) {
+    throw std::runtime_error("function index out of bounds: " + std::to_string(fn_idx));
+  }
+
+  auto instructions = parse_function(&this->functions[fn_idx]);
+  preparse(instructions);
+  this->emit_function_prologue(fn_idx); 
+
+  for(auto pc=0; pc < instructions.size();) {
+    switch(instructions[pc].opcode) {
+      case WASM_OP_LOCAL_GET:
+        emit_local_get(static_cast<uint32_t>(instructions[pc].imm.unsigned_value));
+        break;
+      case WASM_OP_I32_ADD:
+        emit_i32_add();
+        break;
+      default:
+        throw;
+    }
+    pc++;
+  }
+  this->emit_function_epilogoue(fn_idx);
+}
+
+void WasmJit::write_binary(const std::filesystem::path &path) const {
+  std::ofstream output(path, std::ios::binary);
+  if(!output) {
+    throw std::runtime_error("failed to open jit binary output: " + path.string());
+  }
+
+  const auto *code = getCode<const char *>();
+  output.write(code, static_cast<std::streamsize>(getSize()));
+  if(!output) {
+    throw std::runtime_error("failed to write jit binary output: " + path.string());
+  }
+}
+
+void WasmJit::emit_local_get() {
+  throw std::runtime_error("emit_local_get requires a local index");
+}
+
+void WasmJit::emit_local_get(uint32_t local_idx) {
+  for(const auto &[idx, local]: locals) {
+    if(idx == local_idx) {
+      stack.push(local);
+      return;
+    }
+  }
+
+  throw std::runtime_error("local index not mapped: " + std::to_string(local_idx));
+}
+
+void WasmJit::emit_local_set() {
+}
+
+const VecMap<uint32_t, VValue> &WasmJit::local_mappings() const {
+  return locals;
+}
+
 const std::map<size_t, WasmControlFrame> &WasmJit::pc_mappings() const {
   return frame.pc_mappings;
+}
+
+const WasmControlFrame &WasmJit::control_frame_at(size_t pc) const {
+  auto frame_it = frame.pc_mappings.find(pc);
+  if(frame_it == frame.pc_mappings.end()) {
+    throw std::runtime_error("control frame missing at pc " + std::to_string(pc));
+  }
+  return frame_it->second;
+}
+
+WasmInstructionRange WasmJit::instruction_range(
+  const std::vector<Instruction> &instructions,
+  size_t start_pc,
+  size_t end_pc
+) const {
+  if(start_pc > end_pc) {
+    throw std::runtime_error("instruction range start is after end");
+  }
+  if(end_pc > instructions.size()) {
+    throw std::runtime_error("instruction range end is out of bounds");
+  }
+  return WasmInstructionRange {
+    .instructions = &instructions,
+    .start_pc = start_pc,
+    .end_pc = end_pc,
+  };
+}
+
+WasmIfBlockRanges WasmJit::if_block_ranges(
+  const std::vector<Instruction> &instructions,
+  const WasmControlFrame &control_frame
+) const {
+  if(control_frame.kind != WasmControlFrameKind::If) {
+    throw std::runtime_error("if block ranges require an if control frame");
+  }
+
+  const size_t then_end_pc =
+    control_frame.else_pc != 0 ? control_frame.else_pc : control_frame.end_pc;
+  const size_t else_start_pc =
+    control_frame.else_pc != 0 ? control_frame.else_pc + 1 : control_frame.end_pc;
+
+  return WasmIfBlockRanges {
+    .then_branch = instruction_range(instructions, control_frame.start_pc + 1, then_end_pc),
+    .else_branch = instruction_range(instructions, else_start_pc, control_frame.end_pc),
+  };
+}
+
+WasmBlockRanges WasmJit::block_ranges(
+  const std::vector<Instruction> &instructions,
+  const WasmControlFrame &control_frame
+) const {
+  if(control_frame.kind != WasmControlFrameKind::Block) {
+    throw std::runtime_error("block ranges require a block control frame");
+  }
+
+  return WasmBlockRanges {
+    .body = instruction_range(instructions, control_frame.start_pc + 1, control_frame.end_pc + 1),
+  };
+}
+
+WasmLoopBlockRanges WasmJit::loop_block_ranges(
+  const std::vector<Instruction> &instructions,
+  const WasmControlFrame &control_frame
+) const {
+  if(control_frame.kind != WasmControlFrameKind::Loop) {
+    throw std::runtime_error("loop block ranges require a loop control frame");
+  }
+
+  return WasmLoopBlockRanges {
+    .body = instruction_range(instructions, control_frame.start_pc + 1, control_frame.end_pc + 1),
+  };
 }
