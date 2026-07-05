@@ -38,7 +38,7 @@ JitTestOutput compile_add(int32_t lhs, int32_t rhs) {
   WasmJit jit;
   jit.emit_i32_const(lhs);
   jit.emit_i32_const(rhs);
-  jit.emit_add_op();
+  jit.emit_i32_add();
   jit.emit_return_i32();
   return run_jit(jit);
 }
@@ -183,7 +183,7 @@ TEST_CASE("jit writes generated binary code to a file") {
   WasmJit jit;
   jit.emit_i32_const(40);
   jit.emit_i32_const(2);
-  jit.emit_add_op();
+  jit.emit_i32_add();
   jit.emit_return_i32();
 
   const uint8_t *code = jit.getCode<const uint8_t *>();
