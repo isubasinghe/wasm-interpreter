@@ -65,11 +65,12 @@ runghc Shakefile.hs test   # run the grader
 ## Running
 
 ```sh
-wasm-vm [--trace] [--file-log] [-a <space-separated args>] <input.wasm>
+wasm-vm [--trace] [--file-log] [--jit-binary <output-file>] [-a <space-separated args>] <input.wasm>
 ```
 
 - `--trace` — emit an execution trace to `stderr`
 - `--file-log` — route logging to a file
+- `--jit-binary <output-file>` — compile the exported `main` with the JIT and write the generated machine-code bytes
 - `-a <args...>` — arguments passed to the program's `main`
 - The entry point is the exported function named `main`.
 
