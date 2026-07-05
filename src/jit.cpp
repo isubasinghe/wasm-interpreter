@@ -299,12 +299,73 @@ void WasmJit::emit_return_i32() {
   ret();
 }
 
+void WasmJit::emit_return_values(const SigDecl *sig) {
+  if(sig == nullptr || sig->results.empty()) {
+    return;
+  }
+  if(sig->results.size() > 2) {
+    throw std::runtime_error("jit return values require sret for more than two results");
+  }
+
+  std::vector<VValue> results(sig->results.size());
+  for(size_t i = sig->results.size(); i > 0; i--) {
+    if(stack.empty()) {
+      throw std::runtime_error("missing return value");
+    }
+    results[i - 1] = stack.top();
+    stack.pop();
+  }
+
+  auto move_value_to_reg = [this](const VValue &value, Xbyak::Reg64 target) {
+    switch(value.ty) {
+      case WASM_TYPE_I32:
+        if(value.vreg.kind == VRegKind::VRegPhys) {
+          mov(target.cvt32(), value.vreg.physreg.cvt32());
+          mark_reg_free(value.vreg.physreg);
+        } else {
+          mov(target.cvt32(), dword[rbp + value.vreg.stack_offset]);
+        }
+        break;
+      case WASM_TYPE_I64:
+        if(value.vreg.kind == VRegKind::VRegPhys) {
+          mov(target, value.vreg.physreg);
+          mark_reg_free(value.vreg.physreg);
+        } else {
+          mov(target, qword[rbp + value.vreg.stack_offset]);
+        }
+        break;
+      default:
+        throw std::runtime_error("jit return value type is not supported");
+    }
+  };
+
+  if(results.size() == 2) {
+    move_value_to_reg(results[1], Xbyak::util::r11);
+    move_value_to_reg(results[0], Xbyak::util::rax);
+    switch(results[1].ty) {
+      case WASM_TYPE_I32:
+        mov(Xbyak::util::edx, Xbyak::util::r11d);
+        break;
+      case WASM_TYPE_I64:
+        mov(Xbyak::util::rdx, Xbyak::util::r11);
+        break;
+      default:
+        throw std::runtime_error("jit return value type is not supported");
+    }
+    return;
+  }
+
+  move_value_to_reg(results[0], Xbyak::util::rax);
+}
+
 void WasmJit::emit_function_prologue(uint32_t fn_idx) {
   if(fn_idx >= functions.size()) {
     throw std::runtime_error("function index out of bounds: " + std::to_string(fn_idx));
   }
 
   locals.clear();
+  current_sig = functions[fn_idx].sig;
+  current_epilogue_label = "func_" + std::to_string(fn_idx) + "_epilogue";
   while(!stack.empty()) {
     stack.pop();
   }
@@ -377,6 +438,10 @@ void WasmJit::emit_function_prologue(uint32_t fn_idx) {
 }
 
 void WasmJit::emit_function_epilogoue(uint32_t fn_idx) {
+  if(current_epilogue_label.empty()) {
+    throw std::runtime_error("jit epilogue label is not set");
+  }
+  L(current_epilogue_label);
   mov(rsp, rbp);
   pop(rbp);
   ret();
@@ -454,11 +519,24 @@ bool WasmJit::emit_instr() {
     case WASM_OP_BR_IF:
       emit_br_if();
       break;
+    case WASM_OP_RETURN:
+      emit_return();
+      break;
+    case WASM_OP_END:
+      break;
     default:
       throw std::runtime_error("unsupported jit opcode");
   }
   this->pc++;
   return true;
+}
+
+void WasmJit::emit_return() {
+  emit_return_values(current_sig);
+  if(current_epilogue_label.empty()) {
+    throw std::runtime_error("jit return emitted without an epilogue label");
+  }
+  jmp(current_epilogue_label);
 }
 
 void WasmJit::emit_function(uint32_t fn_idx) {
@@ -477,19 +555,10 @@ void WasmJit::emit_function(uint32_t fn_idx) {
       return this->pc == end_pc;
   });
 
-  const auto *sig = functions[fn_idx].sig;
-  if(sig != nullptr && !sig->results.empty()) {
-    if(sig->results.size() != 1 || sig->results.front() != WASM_TYPE_I32) {
-      throw std::runtime_error("jit function results are only supported for single i32 values");
-    }
-    auto result = consume_i32_reg();
-    if(result.vreg.kind != VRegKind::VRegPhys) {
-      throw std::runtime_error("return value must be in a register");
-    }
-    mov(eax, result.vreg.physreg.cvt32());
-    mark_reg_free(result.vreg.physreg);
-  }
+  emit_return_values(functions[fn_idx].sig); 
   this->emit_function_epilogoue(fn_idx);
+  current_sig = nullptr;
+  current_epilogue_label.clear();
 }
 
 void WasmJit::write_binary(const std::filesystem::path &path) const {

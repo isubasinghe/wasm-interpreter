@@ -84,9 +84,12 @@ struct WasmJit: Xbyak::CodeGenerator {
     std::stack<VValue> stack;
     WasmStackFrame frame;
     WasmModule *mod = nullptr;
+    const SigDecl *current_sig = nullptr;
+    std::string current_epilogue_label;
 
     void mark_reg_free(Xbyak::Reg64 free_reg);
     void mark_reg_used(Xbyak::Reg64 used_reg);
+    void emit_return_values(const SigDecl *sig);
     size_t pc = 0;
     size_t instruction_size = 0;
     std::vector<Instruction> instructions;
@@ -105,6 +108,7 @@ struct WasmJit: Xbyak::CodeGenerator {
     void emit_br();
     void emit_br_table();
     void emit_return_i32();
+    void emit_return();
     void emit_local_set();
     void emit_local_get();
     void emit_local_get(uint32_t local_idx);
