@@ -102,12 +102,24 @@ size_t checked_sub_height(size_t height, size_t delta, const char *message) {
   return height - delta;
 }
 
+const WasmControlFrame &control_frame_at_depth(
+  const std::vector<WasmControlFrame> &control_frames,
+  uint64_t depth
+) {
+  if(depth >= control_frames.size()) {
+    throw std::runtime_error("branch label depth exceeds active control frames");
+  }
+
+  return control_frames[control_frames.size() - 1 - static_cast<size_t>(depth)];
+}
+
 void apply_simple_stack_effect(const Instruction &instr, size_t &stack_height) {
   switch(instr.opcode) {
     case WASM_OP_I32_CONST:
     case WASM_OP_I64_CONST:
     case WASM_OP_F32_CONST:
     case WASM_OP_F64_CONST:
+    case WASM_OP_LOCAL_GET:
       stack_height += 1;
       break;
     case WASM_OP_I32_ADD:
@@ -207,75 +219,12 @@ void WasmJit::emit_i32_add() {
   });
 }
 
-void WasmJit::emit_if_block(
-  const std::function<void()> &emit_then_branch,
-  const std::function<void()> &emit_else_branch
-) {
-  if(this->stack.size() <= 0) {
-    throw std::runtime_error("missing if condition");
-  }
-  Xbyak::Label lelse;
-  Xbyak::Label lend;
-  VValue val = this->stack.top();
-  this->stack.pop();
 
-  if(val.vreg.kind != VRegKind::VRegPhys) {
-    throw std::runtime_error("if condition must be in a register");
-  }
 
-  test(val.vreg.physreg.cvt32(), val.vreg.physreg.cvt32());
-  mark_reg_free(val.vreg.physreg);
-  jz(lelse);
-  emit_then_branch();
-  jmp(lend);
-  L(lelse);
-  emit_else_branch();
-  L(lend);
-}
-
-void WasmJit::emit_loop_block(
-     const std::function<void()> &emit_loop_body) {
-}
-
-void WasmJit::emit_br_if(
-    const std::function<void()> &emit_done
-) {
-
-}
-
-void WasmJit::emit_br() {
-}
-
-void WasmJit::emit_br_table() {
-}
-
-WasmInstructionRange::const_iterator WasmInstructionRange::begin() const {
-  if(instructions == nullptr) {
-    throw std::runtime_error("instruction range has no instruction vector");
-  }
-  return instructions->begin() + static_cast<std::vector<Instruction>::difference_type>(start_pc);
-}
-
-WasmInstructionRange::const_iterator WasmInstructionRange::end() const {
-  if(instructions == nullptr) {
-    throw std::runtime_error("instruction range has no instruction vector");
-  }
-  return instructions->begin() + static_cast<std::vector<Instruction>::difference_type>(end_pc);
-}
-
-size_t WasmInstructionRange::size() const {
-  return end_pc - start_pc;
-}
-
-bool WasmInstructionRange::empty() const {
-  return size() == 0;
-}
 
 void WasmJit::preparse(std::vector<Instruction> instructions) {
   frame.pc_mappings.clear();
-  while(!frame.control_frames.empty()) {
-    frame.control_frames.pop();
-  }
+  frame.control_frames.clear();
 
   size_t stack_height = 0;
   size_t next_label_index = 0;
@@ -300,14 +249,14 @@ void WasmJit::preparse(std::vector<Instruction> instructions) {
         control_frame.stack_height =
           checked_sub_height(stack_height, param_count, "control frame requires more params than stack height");
 
-        frame.control_frames.push(control_frame);
+        frame.control_frames.push_back(control_frame);
         break;
       }
       case WASM_OP_ELSE: {
         if(frame.control_frames.empty()) {
           throw std::runtime_error("else without active control frame");
         }
-        auto &control_frame = frame.control_frames.top();
+        auto &control_frame = frame.control_frames.back();
         if(control_frame.kind != WasmControlFrameKind::If) {
           throw std::runtime_error("else requires active if frame");
         }
@@ -323,8 +272,8 @@ void WasmJit::preparse(std::vector<Instruction> instructions) {
           throw std::runtime_error("end without active control frame");
         }
 
-        auto control_frame = frame.control_frames.top();
-        frame.control_frames.pop();
+        auto control_frame = frame.control_frames.back();
+        frame.control_frames.pop_back();
         control_frame.end_pc = pc;
         frame.pc_mappings[control_frame.start_pc] = control_frame;
         stack_height = control_frame.stack_height + control_frame.sig.results.size();
@@ -433,6 +382,84 @@ void WasmJit::emit_function_epilogoue(uint32_t fn_idx) {
   ret();
 }
 
+void WasmJit::emit_until(const std::function<bool(const Instruction &instr)> until) {
+  bool cont = true;
+  while(cont) {
+    if(this->pc < this->instruction_size) {
+      if(until(this->instructions[this->pc])) {
+        return;
+      }
+      cont = emit_instr();
+    }else {
+      cont = false;
+    }
+  }
+}
+
+void WasmJit::emit_block() {
+  const auto &control_frame = control_frame_at(this->pc);
+  this->frame.control_frames.push_back(control_frame);
+  this->pc++;
+
+  emit_until([this, end_pc = control_frame.end_pc](const Instruction &){
+      return this->pc == end_pc;
+  });
+
+  L(control_frame.end_label);
+  this->frame.control_frames.pop_back();
+}
+
+void WasmJit::emit_if_block() {
+  throw std::runtime_error("emit if block is not implemented");
+}
+
+void WasmJit::emit_br_if() {
+  Instruction &instr = this->instructions[this->pc];
+  if(instr.imm.kind != IMM_LABEL) {
+    throw std::runtime_error("br_if immediate must be a label depth");
+  }
+
+  const auto &target_frame = control_frame_at_depth(this->frame.control_frames, instr.imm.unsigned_value);
+  auto condition = consume_i32_reg();
+
+  if(condition.vreg.kind == VRegKind::VRegPhys) {
+    test(condition.vreg.physreg.cvt32(), condition.vreg.physreg.cvt32());
+    mark_reg_free(condition.vreg.physreg);
+  } else {
+    cmp(dword[rbp + condition.vreg.stack_offset], 0);
+  }
+  jnz(target_frame.branch_label);
+}
+
+bool WasmJit::emit_instr() {
+  bool reached_end = this->pc >= this->instruction_size;
+  if(reached_end) {
+    return false;
+  }
+
+  Instruction &instr = this->instructions[this->pc];
+  switch(instr.opcode) {
+    case WASM_OP_LOCAL_GET:
+      emit_local_get(instr.imm.unsigned_value);
+      break;
+    case WASM_OP_I32_CONST:
+      emit_i32_const(instr.imm.signed_value);
+      break;
+    case WASM_OP_I32_ADD:
+      emit_i32_add();
+      break;
+    case WASM_OP_BLOCK:
+      emit_block();
+      break;
+    case WASM_OP_BR_IF:
+      emit_br_if();
+      break;
+    default:
+      throw std::runtime_error("unsupported jit opcode");
+  }
+  this->pc++;
+  return true;
+}
 
 void WasmJit::emit_function(uint32_t fn_idx) {
   if(fn_idx >= functions.size()) {
@@ -441,20 +468,26 @@ void WasmJit::emit_function(uint32_t fn_idx) {
 
   auto instructions = parse_function(&this->functions[fn_idx]);
   preparse(instructions);
-  this->emit_function_prologue(fn_idx); 
+  this->emit_function_prologue(fn_idx);
+  this->pc = 0;
+  this->instruction_size = instructions.size();
+  this->instructions = instructions;
 
-  for(auto pc=0; pc < instructions.size();) {
-    switch(instructions[pc].opcode) {
-      case WASM_OP_LOCAL_GET:
-        emit_local_get(static_cast<uint32_t>(instructions[pc].imm.unsigned_value));
-        break;
-      case WASM_OP_I32_ADD:
-        emit_i32_add();
-        break;
-      default:
-        throw;
+  emit_until([this, end_pc = this->instruction_size](const Instruction &instr) { 
+      return this->pc == end_pc;
+  });
+
+  const auto *sig = functions[fn_idx].sig;
+  if(sig != nullptr && !sig->results.empty()) {
+    if(sig->results.size() != 1 || sig->results.front() != WASM_TYPE_I32) {
+      throw std::runtime_error("jit function results are only supported for single i32 values");
     }
-    pc++;
+    auto result = consume_i32_reg();
+    if(result.vreg.kind != VRegKind::VRegPhys) {
+      throw std::runtime_error("return value must be in a register");
+    }
+    mov(eax, result.vreg.physreg.cvt32());
+    mark_reg_free(result.vreg.physreg);
   }
   this->emit_function_epilogoue(fn_idx);
 }
@@ -504,67 +537,4 @@ const WasmControlFrame &WasmJit::control_frame_at(size_t pc) const {
     throw std::runtime_error("control frame missing at pc " + std::to_string(pc));
   }
   return frame_it->second;
-}
-
-WasmInstructionRange WasmJit::instruction_range(
-  const std::vector<Instruction> &instructions,
-  size_t start_pc,
-  size_t end_pc
-) const {
-  if(start_pc > end_pc) {
-    throw std::runtime_error("instruction range start is after end");
-  }
-  if(end_pc > instructions.size()) {
-    throw std::runtime_error("instruction range end is out of bounds");
-  }
-  return WasmInstructionRange {
-    .instructions = &instructions,
-    .start_pc = start_pc,
-    .end_pc = end_pc,
-  };
-}
-
-WasmIfBlockRanges WasmJit::if_block_ranges(
-  const std::vector<Instruction> &instructions,
-  const WasmControlFrame &control_frame
-) const {
-  if(control_frame.kind != WasmControlFrameKind::If) {
-    throw std::runtime_error("if block ranges require an if control frame");
-  }
-
-  const size_t then_end_pc =
-    control_frame.else_pc != 0 ? control_frame.else_pc : control_frame.end_pc;
-  const size_t else_start_pc =
-    control_frame.else_pc != 0 ? control_frame.else_pc + 1 : control_frame.end_pc;
-
-  return WasmIfBlockRanges {
-    .then_branch = instruction_range(instructions, control_frame.start_pc + 1, then_end_pc),
-    .else_branch = instruction_range(instructions, else_start_pc, control_frame.end_pc),
-  };
-}
-
-WasmBlockRanges WasmJit::block_ranges(
-  const std::vector<Instruction> &instructions,
-  const WasmControlFrame &control_frame
-) const {
-  if(control_frame.kind != WasmControlFrameKind::Block) {
-    throw std::runtime_error("block ranges require a block control frame");
-  }
-
-  return WasmBlockRanges {
-    .body = instruction_range(instructions, control_frame.start_pc + 1, control_frame.end_pc + 1),
-  };
-}
-
-WasmLoopBlockRanges WasmJit::loop_block_ranges(
-  const std::vector<Instruction> &instructions,
-  const WasmControlFrame &control_frame
-) const {
-  if(control_frame.kind != WasmControlFrameKind::Loop) {
-    throw std::runtime_error("loop block ranges require a loop control frame");
-  }
-
-  return WasmLoopBlockRanges {
-    .body = instruction_range(instructions, control_frame.start_pc + 1, control_frame.end_pc + 1),
-  };
 }

@@ -63,33 +63,7 @@ struct WasmControlFrame {
 
 struct WasmStackFrame {
   std::map<size_t, WasmControlFrame> pc_mappings;
-  std::stack<WasmControlFrame> control_frames;
-};
-
-struct WasmInstructionRange {
-  using const_iterator = std::vector<Instruction>::const_iterator;
-
-  const std::vector<Instruction> *instructions = nullptr;
-  size_t start_pc = 0;
-  size_t end_pc = 0;
-
-  const_iterator begin() const;
-  const_iterator end() const;
-  size_t size() const;
-  bool empty() const;
-};
-
-struct WasmIfBlockRanges {
-  WasmInstructionRange then_branch;
-  WasmInstructionRange else_branch;
-};
-
-struct WasmBlockRanges {
-  WasmInstructionRange body;
-};
-
-struct WasmLoopBlockRanges {
-  WasmInstructionRange body;
+  std::vector<WasmControlFrame> control_frames;
 };
 
 struct WasmJit: Xbyak::CodeGenerator {
@@ -113,6 +87,9 @@ struct WasmJit: Xbyak::CodeGenerator {
 
     void mark_reg_free(Xbyak::Reg64 free_reg);
     void mark_reg_used(Xbyak::Reg64 used_reg);
+    size_t pc = 0;
+    size_t instruction_size = 0;
+    std::vector<Instruction> instructions;
 
   public:
     WasmJit() = default;
@@ -122,23 +99,18 @@ struct WasmJit: Xbyak::CodeGenerator {
     VReg produce_i32_reg();
     void emit_i32_const(int32_t value);
     void emit_i32_add();
-    void emit_if_block(
-      const std::function<void()> &emit_then_branch,
-      const std::function<void()> &emit_else_branch
-    );
-    void emit_loop_block(
-      const std::function<void()> &emit_loop_body
-    );
-
-    void emit_br_if(
-      const std::function<void()> &emit_done
-    );
+    void emit_if_block();
+    void emit_loop_block();
+    void emit_br_if();
     void emit_br();
     void emit_br_table();
     void emit_return_i32();
     void emit_local_set();
     void emit_local_get();
     void emit_local_get(uint32_t local_idx);
+    bool emit_instr();
+    void emit_block();
+    void emit_until(const std::function<bool(const Instruction &instr)> fn);
     void emit_function_prologue(uint32_t fn_idx);
     void emit_function_epilogoue(uint32_t fn_idx);
     void emit_function(uint32_t fn_idx);
@@ -147,21 +119,4 @@ struct WasmJit: Xbyak::CodeGenerator {
     const VecMap<uint32_t, VValue> &local_mappings() const;
     const std::map<size_t, WasmControlFrame> &pc_mappings() const;
     const WasmControlFrame &control_frame_at(size_t pc) const;
-    WasmInstructionRange instruction_range(
-      const std::vector<Instruction> &instructions,
-      size_t start_pc,
-      size_t end_pc
-    ) const;
-    WasmIfBlockRanges if_block_ranges(
-      const std::vector<Instruction> &instructions,
-      const WasmControlFrame &control_frame
-    ) const;
-    WasmBlockRanges block_ranges(
-      const std::vector<Instruction> &instructions,
-      const WasmControlFrame &control_frame
-    ) const;
-    WasmLoopBlockRanges loop_block_ranges(
-      const std::vector<Instruction> &instructions,
-      const WasmControlFrame &control_frame
-    ) const;
 };

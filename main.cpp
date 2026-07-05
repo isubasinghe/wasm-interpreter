@@ -9,29 +9,43 @@
 #include "ir.h"
 #include "dump.h"
 #include "interpreter.h"
+#include "jit.h"
 
 static struct option long_options[] = {
   {"trace", no_argument,  &g_trace, 1},
   {"file-log", no_argument, NULL, 'l'},
   {"args", optional_argument, NULL, 'a'},
+  {"jit-binary", required_argument, NULL, 'j'},
   {"help", no_argument, NULL, 'h'}
 };
 
 typedef struct args_t {
   std::string infile;
+  std::string jit_binary_outfile;
   std::vector<std::string> mainargs;
   bool file_logging = false;
 } args_t;
+
+static void print_usage(const char *program) {
+  ERR(
+    "Usage: %s [--trace] [--file-log] [--jit-binary <output-file>] "
+    "[-a <space-separated args>] <input-file>\n",
+    program
+  );
+}
 
 args_t parse_args(int argc, char* argv[]) {
   int opt;
   args_t args;
   optind = 0;
-  while ((opt = getopt_long_only(argc, argv, ":a:lh", long_options, NULL)) != -1) {
+  while ((opt = getopt_long_only(argc, argv, ":a:j:lh", long_options, NULL)) != -1) {
     switch(opt) {
       case 0: break;
       case 'l':
         args.file_logging = true;
+        break;
+      case 'j':
+        args.jit_binary_outfile = optarg;
         break;
       case 'a':
         args.mainargs.push_back(optarg);
@@ -41,7 +55,7 @@ args_t parse_args(int argc, char* argv[]) {
         break;
       case 'h':
       default:
-        ERR("Usage: %s [--trace] [--file-log] [-a <space-separated args>] <input-file>\n", argv[0]);
+        print_usage(argv[0]);
         exit(opt != 'h');
     }
   }
@@ -53,6 +67,15 @@ args_t parse_args(int argc, char* argv[]) {
 
   args.infile = std::string(argv[optind]);
   return args;
+}
+
+static FuncDecl *find_exported_main(WasmModule &mod) {
+  for(auto &exp: mod.Exports()) {
+    if(exp.name == "main" && exp.kind == KIND_FUNC) {
+      return exp.desc.func;
+    }
+  }
+  return nullptr;
 }
 
 // Main function.
@@ -74,6 +97,23 @@ int main(int argc, char *argv[]) {
   TRACE("loaded %s: %ld bytes\n", infile, r);
   WasmModule mod = parse_bytecode(start, end);
   unload_file(&start, &end);
+
+  if(!args.jit_binary_outfile.empty()) {
+    FuncDecl *main_func = find_exported_main(mod);
+    if(main_func == nullptr) {
+      ERR("failed to find exported function \"main\"\n");
+      return 1;
+    }
+    if(mod.isImport(main_func)) {
+      ERR("cannot jit imported function \"main\"\n");
+      return 1;
+    }
+
+    WasmJit jit(&mod);
+    jit.emit_function(mod.getFuncIdx(main_func));
+    jit.write_binary(args.jit_binary_outfile);
+    return 0;
+  }
   
   /* Interpreter here */
   /* */
@@ -87,5 +127,4 @@ int main(int argc, char *argv[]) {
 
   return 0;
 }
-
 
