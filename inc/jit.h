@@ -109,7 +109,9 @@ struct WasmJit: Xbyak::CodeGenerator {
     void emit_br_table();
     void emit_return_i32();
     void emit_return();
-    void emit_local_set();
+    // Copies bits without changing either value's storage mapping or ownership.
+    void emit_move(const VValue &destination, const VValue &source);
+    void emit_local_set(uint32_t local_idx);
     void emit_local_get();
     void emit_local_get(uint32_t local_idx);
     bool emit_instr();

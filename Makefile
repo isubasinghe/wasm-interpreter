@@ -11,7 +11,7 @@ run-tests: build build-tests
 	./grade.sh
 
 run-jit-tests: build
-	ctest --test-dir build --output-on-failure -R jit_test
+	ctest --test-dir build --output-on-failure -R '^jit_.*test$$'
 
 clean:
 	rm -r build

@@ -133,6 +133,9 @@ void apply_simple_stack_effect(const Instruction &instr, size_t &stack_height) {
     case WASM_OP_BR_IF:
       stack_height = checked_sub_height(stack_height, 1, "br_if requires a condition");
       break;
+    case WASM_OP_LOCAL_SET:
+      stack_height = checked_sub_height(stack_height, 1, "local.set requires a value");
+      break;
     default:
       break;
   }
@@ -507,6 +510,9 @@ bool WasmJit::emit_instr() {
     case WASM_OP_LOCAL_GET:
       emit_local_get(instr.imm.unsigned_value);
       break;
+    case WASM_OP_LOCAL_SET:
+      emit_local_set(instr.imm.unsigned_value);
+      break;
     case WASM_OP_I32_CONST:
       emit_i32_const(instr.imm.signed_value);
       break;
@@ -579,17 +585,72 @@ void WasmJit::emit_local_get() {
 }
 
 void WasmJit::emit_local_get(uint32_t local_idx) {
-  for(const auto &[idx, local]: locals) {
-    if(idx == local_idx) {
-      stack.push(local);
-      return;
-    }
+  if(!locals.contains(local_idx)) {
+    throw std::runtime_error("local index not mapped: " + std::to_string(local_idx));
   }
-
-  throw std::runtime_error("local index not mapped: " + std::to_string(local_idx));
+  const auto &local = locals.at(local_idx);
+  if(local.ty != WASM_TYPE_I32 && local.ty != WASM_TYPE_I64) {
+    throw std::runtime_error("jit local.get type is not supported");
+  }
+  VValue copy {.vreg = produce_i32_reg(), .ty = local.ty};
+  emit_move(copy, local);
+  stack.push(copy);
 }
 
-void WasmJit::emit_local_set() {
+void WasmJit::emit_move(const VValue &destination, const VValue &source) {
+  if(destination.ty != source.ty) {
+    throw std::runtime_error("jit move types must match");
+  }
+  if(source.ty != WASM_TYPE_I32 && source.ty != WASM_TYPE_I64) {
+    throw std::runtime_error("jit move type is not supported");
+  }
+
+  const auto &dst = destination.vreg;
+  const auto &src = source.vreg;
+  const bool is_i32 = source.ty == WASM_TYPE_I32;
+  if(dst.kind == VRegPhys && src.kind == VRegPhys) {
+    if(is_i32) {
+      mov(dst.physreg.cvt32(), src.physreg.cvt32());
+    } else {
+      mov(dst.physreg, src.physreg);
+    }
+  } else if(dst.kind == VRegPhys) {
+    if(is_i32) {
+      mov(dst.physreg.cvt32(), dword[rbp + src.stack_offset]);
+    } else {
+      mov(dst.physreg, qword[rbp + src.stack_offset]);
+    }
+  } else if(src.kind == VRegPhys) {
+    if(is_i32) {
+      mov(dword[rbp + dst.stack_offset], src.physreg.cvt32());
+    } else {
+      mov(qword[rbp + dst.stack_offset], src.physreg);
+    }
+  } else {
+    // x86 has no memory-to-memory mov; r11 is reserved for scratch use.
+    if(is_i32) {
+      mov(r11d, dword[rbp + src.stack_offset]);
+      mov(dword[rbp + dst.stack_offset], r11d);
+    } else {
+      mov(r11, qword[rbp + src.stack_offset]);
+      mov(qword[rbp + dst.stack_offset], r11);
+    }
+  }
+}
+
+void WasmJit::emit_local_set(uint32_t local_idx) {
+  if(!locals.contains(local_idx)) {
+    throw std::runtime_error("local index not mapped: " + std::to_string(local_idx));
+  }
+  if(stack.empty()) {
+    throw std::runtime_error("local.set requires a value");
+  }
+  const auto source = stack.top();
+  emit_move(locals.at(local_idx), source);
+  stack.pop();
+  if(source.vreg.kind == VRegPhys) {
+    mark_reg_free(source.vreg.physreg);
+  }
 }
 
 const VecMap<uint32_t, VValue> &WasmJit::local_mappings() const {

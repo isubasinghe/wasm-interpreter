@@ -17,6 +17,10 @@ add_executable(jit_test tests/jit_test.cpp)
 target_link_libraries(jit_test vm doctest::doctest -lm)
 add_test(NAME jit_test COMMAND jit_test)
 
+add_executable(jit_locals_test tests/jit_locals_test.cpp)
+target_link_libraries(jit_locals_test vm doctest::doctest -lm)
+add_test(NAME jit_locals_test COMMAND jit_locals_test)
+
 add_custom_command(
   TARGET wasm-vm
   POST_BUILD

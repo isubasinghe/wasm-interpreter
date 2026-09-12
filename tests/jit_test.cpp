@@ -43,21 +43,6 @@ JitTestOutput compile_add(int32_t lhs, int32_t rhs) {
   return run_jit(jit);
 }
 
-JitTestOutput compile_if(int32_t condition, int32_t then_value, int32_t else_value) {
-  WasmJit jit;
-  jit.emit_i32_const(condition);
-  jit.emit_if_block(
-    [&]() {
-      jit.mov(Xbyak::util::eax, then_value);
-    },
-    [&]() {
-      jit.mov(Xbyak::util::eax, else_value);
-    }
-  );
-  jit.ret();
-  return run_jit(jit);
-}
-
 Instruction instruction(Opcode_t opcode) {
   Instruction instr;
   instr.opcode = opcode;
@@ -156,14 +141,6 @@ std::vector<uint8_t> read_binary_file(const std::filesystem::path &path) {
   );
 }
 
-std::vector<Opcode_t> opcodes_in(const WasmInstructionRange &range) {
-  std::vector<Opcode_t> opcodes;
-  for(const auto &instr: range) {
-    opcodes.push_back(instr.opcode);
-  }
-  return opcodes;
-}
-
 } // namespace
 
 TEST_CASE("jit i32.add returns expected values") {
@@ -209,15 +186,6 @@ TEST_CASE("jit i32.add disassembly contains add and ret") {
   CAPTURE(asm_text);
   CHECK(asm_text.find("add") != std::string::npos);
   CHECK(asm_text.find("ret") != std::string::npos);
-}
-
-TEST_CASE("jit if block emits then branch for nonzero condition") {
-  CHECK(compile_if(1, 11, 22).result == 11);
-  CHECK(compile_if(-1, 11, 22).result == 11);
-}
-
-TEST_CASE("jit if block emits else branch for zero condition") {
-  CHECK(compile_if(0, 11, 22).result == 22);
 }
 
 TEST_CASE("jit preparse records block frame stack height") {
@@ -353,173 +321,44 @@ TEST_CASE("jit returns a preparsed control frame by program counter") {
   CHECK_THROWS_AS(jit.control_frame_at(1), std::runtime_error);
 }
 
-TEST_CASE("jit instruction ranges expose half-open absolute pc bounds") {
+TEST_CASE("jit preparse records if boundaries without else") {
   WasmJit jit;
-  std::vector<Instruction> instructions {
+  jit.preparse({
     instruction(WASM_OP_I32_CONST),
-    instruction(WASM_OP_I32_CONST),
-    instruction(WASM_OP_I32_ADD),
-    instruction(WASM_OP_END),
-  };
-
-  auto range = jit.instruction_range(instructions, 1, 3);
-
-  CHECK(range.start_pc == 1);
-  CHECK(range.end_pc == 3);
-  CHECK(range.size() == 2);
-  CHECK(!range.empty());
-  CHECK(opcodes_in(range) == std::vector<Opcode_t> {
-    WASM_OP_I32_CONST,
-    WASM_OP_I32_ADD,
-  });
-}
-
-TEST_CASE("jit if block ranges split then and else bodies") {
-  WasmJit jit;
-  std::vector<Instruction> instructions {
-    instruction(WASM_OP_I32_CONST),
-    result_block_instruction(WASM_OP_IF, WASM_TYPE_I32),
-    instruction(WASM_OP_I32_CONST),
-    instruction(WASM_OP_ELSE),
-    instruction(WASM_OP_I32_CONST),
-    instruction(WASM_OP_I32_CONST),
-    instruction(WASM_OP_I32_ADD),
+    block_instruction(WASM_OP_IF),
     instruction(WASM_OP_END),
     instruction(WASM_OP_END),
-  };
-  jit.preparse(instructions);
-
-  auto ranges = jit.if_block_ranges(instructions, jit.control_frame_at(1));
-
-  CHECK(ranges.then_branch.start_pc == 2);
-  CHECK(ranges.then_branch.end_pc == 3);
-  CHECK(opcodes_in(ranges.then_branch) == std::vector<Opcode_t> {
-    WASM_OP_I32_CONST,
   });
 
-  CHECK(ranges.else_branch.start_pc == 4);
-  CHECK(ranges.else_branch.end_pc == 7);
-  CHECK(opcodes_in(ranges.else_branch) == std::vector<Opcode_t> {
-    WASM_OP_I32_CONST,
-    WASM_OP_I32_CONST,
-    WASM_OP_I32_ADD,
-  });
+  const auto &frame = jit.control_frame_at(1);
+  CHECK(frame.kind == WasmControlFrameKind::If);
+  CHECK(frame.start_pc == 1);
+  CHECK(frame.else_pc == 0);
+  CHECK(frame.end_pc == 2);
+  CHECK(frame.stack_height == 0);
 }
 
-TEST_CASE("jit if block ranges use an empty else body when there is no else") {
+TEST_CASE("jit preparse records nested block and loop boundaries") {
   WasmJit jit;
-  std::vector<Instruction> instructions {
-    instruction(WASM_OP_I32_CONST),
-    result_block_instruction(WASM_OP_IF, WASM_TYPE_I32),
-    instruction(WASM_OP_I32_CONST),
-    instruction(WASM_OP_END),
-    instruction(WASM_OP_END),
-  };
-  jit.preparse(instructions);
-
-  auto ranges = jit.if_block_ranges(instructions, jit.control_frame_at(1));
-
-  CHECK(ranges.then_branch.start_pc == 2);
-  CHECK(ranges.then_branch.end_pc == 3);
-  CHECK(ranges.else_branch.start_pc == 3);
-  CHECK(ranges.else_branch.end_pc == 3);
-  CHECK(ranges.else_branch.empty());
-}
-
-TEST_CASE("jit block ranges expose the block body and matching end") {
-  WasmJit jit;
-  std::vector<Instruction> instructions {
+  jit.preparse({
     block_instruction(WASM_OP_BLOCK),
-    instruction(WASM_OP_I32_CONST),
-    instruction(WASM_OP_I32_CONST),
-    instruction(WASM_OP_I32_ADD),
-    instruction(WASM_OP_END),
-    instruction(WASM_OP_END),
-  };
-  jit.preparse(instructions);
-
-  auto ranges = jit.block_ranges(instructions, jit.control_frame_at(0));
-
-  CHECK(ranges.body.start_pc == 1);
-  CHECK(ranges.body.end_pc == 5);
-  CHECK(opcodes_in(ranges.body) == std::vector<Opcode_t> {
-    WASM_OP_I32_CONST,
-    WASM_OP_I32_CONST,
-    WASM_OP_I32_ADD,
-    WASM_OP_END,
-  });
-}
-
-TEST_CASE("jit loop block ranges expose the loop body and matching end") {
-  WasmJit jit;
-  std::vector<Instruction> instructions {
     block_instruction(WASM_OP_LOOP),
     instruction(WASM_OP_I32_CONST),
     instruction(WASM_OP_BR_IF),
     instruction(WASM_OP_END),
-    instruction(WASM_OP_END),
-  };
-  jit.preparse(instructions);
-
-  auto ranges = jit.loop_block_ranges(instructions, jit.control_frame_at(0));
-
-  CHECK(ranges.body.start_pc == 1);
-  CHECK(ranges.body.end_pc == 4);
-  CHECK(opcodes_in(ranges.body) == std::vector<Opcode_t> {
-    WASM_OP_I32_CONST,
-    WASM_OP_BR_IF,
-    WASM_OP_END,
-  });
-}
-
-TEST_CASE("jit block ranges include nested control frames as normal instructions") {
-  WasmJit jit;
-  std::vector<Instruction> instructions {
-    block_instruction(WASM_OP_BLOCK),
-    block_instruction(WASM_OP_LOOP),
-    instruction(WASM_OP_END),
     instruction(WASM_OP_I32_CONST),
     instruction(WASM_OP_END),
     instruction(WASM_OP_END),
-  };
-  jit.preparse(instructions);
-
-  auto block_ranges = jit.block_ranges(instructions, jit.control_frame_at(0));
-  auto loop_ranges = jit.loop_block_ranges(instructions, jit.control_frame_at(1));
-
-  CHECK(block_ranges.body.start_pc == 1);
-  CHECK(block_ranges.body.end_pc == 5);
-  CHECK(opcodes_in(block_ranges.body) == std::vector<Opcode_t> {
-    WASM_OP_LOOP,
-    WASM_OP_END,
-    WASM_OP_I32_CONST,
-    WASM_OP_END,
   });
 
-  CHECK(loop_ranges.body.start_pc == 2);
-  CHECK(loop_ranges.body.end_pc == 3);
-  CHECK(opcodes_in(loop_ranges.body) == std::vector<Opcode_t> {
-    WASM_OP_END,
-  });
-}
-
-TEST_CASE("jit control frame range helpers require matching frame kinds") {
-  WasmJit jit;
-  std::vector<Instruction> instructions {
-    block_instruction(WASM_OP_BLOCK),
-    block_instruction(WASM_OP_LOOP),
-    instruction(WASM_OP_END),
-    instruction(WASM_OP_END),
-    instruction(WASM_OP_END),
-  };
-  jit.preparse(instructions);
-
-  const auto &block_frame = jit.control_frame_at(0);
-  const auto &loop_frame = jit.control_frame_at(1);
-
-  CHECK_THROWS_AS(jit.loop_block_ranges(instructions, block_frame), std::runtime_error);
-  CHECK_THROWS_AS(jit.block_ranges(instructions, loop_frame), std::runtime_error);
-  CHECK_THROWS_AS(jit.if_block_ranges(instructions, block_frame), std::runtime_error);
+  const auto &block = jit.control_frame_at(0);
+  const auto &loop = jit.control_frame_at(1);
+  CHECK(block.kind == WasmControlFrameKind::Block);
+  CHECK(block.start_pc == 0);
+  CHECK(block.end_pc == 6);
+  CHECK(loop.kind == WasmControlFrameKind::Loop);
+  CHECK(loop.start_pc == 1);
+  CHECK(loop.end_pc == 4);
 }
 
 TEST_CASE("vecmap supports small map lookup and iteration") {
@@ -659,7 +498,7 @@ TEST_CASE("jit prologue maps pure locals to static frame slots") {
   CHECK(locals.at(2).ty == WASM_TYPE_I32);
 }
 
-TEST_CASE("jit does not free registers that are mapped to locals") {
+TEST_CASE("jit local.set releases its temporary and reserves local registers") {
   WasmModule mod;
   SigDecl sig;
   sig.params = {WASM_TYPE_I32};
@@ -670,16 +509,17 @@ TEST_CASE("jit does not free registers that are mapped to locals") {
   jit.emit_function_prologue(0);
 
   jit.emit_i32_const(1);
-  jit.emit_if_block(
-    [&]() {},
-    [&]() {}
-  );
+  jit.emit_local_set(0);
 
-  auto next = jit.produce_i32_reg();
-  CHECK(next.physreg != Xbyak::util::rdi);
+  // Seven of the eight allocatable registers remain available; rdi holds local 0.
+  for(size_t i = 0; i < 7; i++) {
+    auto next = jit.produce_i32_reg();
+    CHECK(next.physreg != Xbyak::util::rdi);
+  }
+  CHECK_THROWS_AS(jit.produce_i32_reg(), std::runtime_error);
 }
 
-TEST_CASE("jit local.get pushes register-backed local values") {
+TEST_CASE("jit local.get copies register-backed local values") {
   WasmModule mod;
   SigDecl sig;
   sig.params = {WASM_TYPE_I32};
@@ -692,11 +532,11 @@ TEST_CASE("jit local.get pushes register-backed local values") {
 
   auto value = jit.consume_i32_reg();
   CHECK(value.vreg.kind == VRegPhys);
-  CHECK(value.vreg.physreg == Xbyak::util::rdi);
+  CHECK(value.vreg.physreg != Xbyak::util::rdi);
   CHECK(value.ty == WASM_TYPE_I32);
 }
 
-TEST_CASE("jit local.get pushes stack-passed parameter locations") {
+TEST_CASE("jit local.get loads stack-passed parameters into registers") {
   WasmModule mod;
   SigDecl sig;
   sig.params = {
@@ -716,12 +556,13 @@ TEST_CASE("jit local.get pushes stack-passed parameter locations") {
   jit.emit_local_get(6);
 
   auto value = jit.consume_i32_reg();
-  CHECK(value.vreg.kind == VRegSpilled);
-  CHECK(value.vreg.stack_offset == 16);
+  CHECK(value.vreg.kind == VRegPhys);
+  CHECK(jit.local_mappings().at(6).vreg.kind == VRegSpilled);
+  CHECK(jit.local_mappings().at(6).vreg.stack_offset == 16);
   CHECK(value.ty == WASM_TYPE_I32);
 }
 
-TEST_CASE("jit local.get pushes pure local frame slots") {
+TEST_CASE("jit local.get loads pure locals into registers") {
   WasmModule mod;
   SigDecl sig;
   sig.params = {WASM_TYPE_I32};
@@ -739,8 +580,9 @@ TEST_CASE("jit local.get pushes pure local frame slots") {
   jit.emit_local_get(1);
 
   auto value = jit.consume_i32_reg();
-  CHECK(value.vreg.kind == VRegSpilled);
-  CHECK(value.vreg.stack_offset == -8);
+  CHECK(value.vreg.kind == VRegPhys);
+  CHECK(jit.local_mappings().at(1).vreg.kind == VRegSpilled);
+  CHECK(jit.local_mappings().at(1).vreg.stack_offset == -8);
   CHECK(value.ty == WASM_TYPE_I32);
 }
 
