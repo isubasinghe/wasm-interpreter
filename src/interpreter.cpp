@@ -45,19 +45,19 @@ std::shared_ptr<spdlog::logger> make_interpreter_logger(bool file_logging) {
 Interpreter::Interpreter(WasmModule mod, bool file_logging)
     : logger(make_interpreter_logger(file_logging)) {
   this->mod = mod;
-  for(auto const &f: mod.Funcs()) {
+  for(auto const &f: this->mod.Funcs()) {
     this->push_func(f);
   }
 
-  for(auto const &t: mod.Tables()) {
+  for(auto const &t: this->mod.Tables()) {
     this->add_table(t);
   }
 
-  for(auto const &e: mod.Elems()) {
+  for(auto const &e: this->mod.Elems()) {
     size_t offset = e.table_offset;
     auto i = 0;
     for(auto &f: e.func_indices) {
-      this->tables.set_elem(0, offset+i, mod.getFuncIdx(f));
+      this->tables.set_elem(0, offset+i, this->mod.getFuncIdx(f));
       i++;
     }
   }
@@ -86,7 +86,9 @@ void Interpreter::handle_call(uint32_t fn_idx) {
 
   FuncDecl &function = this->functions[fn_idx];
   std::vector<Immediate> args = this->handler.enter_function(function.sig);
+  std::cout << "enter_function was fine\n";
   this->run_function(&function, args);
+  std::cout << "run function was fine\n";
   this->exit_function(&function);
 }
 
@@ -476,7 +478,8 @@ StepResult Interpreter::run_step(FuncDecl *f,
       const std::vector<Instruction> &instructions,
       std::vector<Immediate> &args
     ) {
-  if(this->pc() + 1 == instructions.size()) {
+
+  if(this->pc() == instructions.size() - 1) {
     return StepResult::FunctionEnd;
   }
 
@@ -488,7 +491,9 @@ StepResult Interpreter::run_step(FuncDecl *f,
   Instruction instr = instructions[this->pc()];
   switch(instr.opcode) {
     case WASM_OP_CALL:
+      std::cout << "we are calling a function now\n";
       this->handle_call(instr.imm.signed_value);
+      std::cout << "safely called a function\n";
       break;
     case WASM_OP_I32_CONST:
       this->stack().push(instr.imm);
@@ -678,6 +683,12 @@ void Interpreter::run_function(FuncDecl *f, std::vector<Immediate> args) {
   }
   
   std::vector<Instruction> instructions = this->parse_function(f);
+
+  for(auto const &isntr: instructions) {
+    std::cout << "---instr---\n";
+    std::cout << "opcode: " << std::format("{:#04x}", isntr.opcode) << std::endl; 
+    std::cout << "imm: " << isntr.imm << std::endl;
+  }
   this->handler.pc_mappings() = preparse(instructions);
   this->pc() = 0;
   
@@ -800,7 +811,8 @@ std::vector<Immediate> ControlHandler::enter_function(SigDecl *decl) {
   if(this->frames.size() <= 0 && has_args) {
     throw WasmError("the function signature expects args the stack frame size is zero, there is nothing to peek at");
   }
-
+  
+  std::cout << "safe1\n";
   StackFrame &caller_frame = this->frames.top();
 
   if(decl->params.size() > caller_frame.stack.size()) {
@@ -820,6 +832,8 @@ std::vector<Immediate> ControlHandler::enter_function(SigDecl *decl) {
       args.push_back(imm);
     }
   }
+
+  std::cout << "safe2\n";
   this->frames.push(callee_frame);
   return args;
 }

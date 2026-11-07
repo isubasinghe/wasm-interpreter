@@ -9,7 +9,6 @@
 #include <algorithm>
 #include <memory>
 #include <ostream>
-#include <unordered_map>
 
 #include "common.h"
 #include "wasmdefs.h"
@@ -159,10 +158,10 @@ struct ExportDecl {
 
 struct ImportSet {
   std::list <ImportDecl> list;
-  uint32_t num_funcs;
-  uint32_t num_tables;
-  uint32_t num_mems;
-  uint32_t num_globals;
+  uint32_t num_funcs = 0;
+  uint32_t num_tables = 0;
+  uint32_t num_mems = 0;
+  uint32_t num_globals = 0;
 
   inline uint32_t get_num_imports () {
     return num_funcs + num_tables + num_mems + num_globals;
@@ -174,8 +173,8 @@ struct ImportSet {
 class WasmModule {
 
   private:
-    uint32_t magic;
-    uint32_t version;
+    uint32_t magic = 0;
+    uint32_t version = 0;
 
     std::list <CustomDecl>  customs;
     std::list <SigDecl>     sigs;
@@ -193,15 +192,15 @@ class WasmModule {
     std::list <DataDecl>    datas;
 
     /* Start section */
-    FuncDecl* start_fn;
+    FuncDecl* start_fn = nullptr;
 
     /* Datacount section */ 
-    int has_datacount;
+    int has_datacount = 0;
     /* For decode validation only, don't use otherwise */
-    int num_datas_datacount;
+    int num_datas_datacount = 0;
 
     /* Custom name section debug reference */
-    std::list <DebugNameAssoc> *fn_names_debug;
+    std::list <DebugNameAssoc> *fn_names_debug = nullptr;
 
     /* Decode functions */
     #define DECODE_DECL(sec,...)  \
@@ -220,19 +219,11 @@ class WasmModule {
     DECODE_DECL(datacount);
     DECODE_DECL(custom);
 
-    /* Descriptor patching for copy/assign */
-    template<typename T>
-    void DescriptorPatch (std::list<T> &list, const WasmModule &mod, std::unordered_map<void*, void*> &reassign_cache);
-    /* Function patching for copy/assign */
-    void FunctionPatch (const WasmModule &mod, std::unordered_map<void*, void*> &reassign_cache);
-    /* Custom section patching for copy/assign */
-    void CustomPatch (const WasmModule &mod, std::unordered_map<void*, void*> &reassign_cache);
-
-    /* Perform a full deep copy */
-    WasmModule& deepcopy(const WasmModule &mod, const char* log_str);
+    void swap(WasmModule &other) noexcept;
 
   public:
     WasmModule () = default;
+    /* Copies own their section data and redirect internal pointers into the copy. */
     WasmModule (const WasmModule &mod);
     ~WasmModule() = default;
 

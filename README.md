@@ -58,9 +58,19 @@ A Haskell [Shake](https://shakebuild.com/) build is also available:
 
 ```sh
 runghc Shakefile.hs        # build
+runghc Shakefile.hs debug  # build wasm-vm for GDB (-O0, full debug symbols)
 runghc Shakefile.hs tests  # build tests
-runghc Shakefile.hs test   # run the grader
+runghc Shakefile.hs test   # build and check Wasm fixtures against tests/expect
+runghc Shakefile.hs jit-test # build and run the C++ JIT test suites
 ```
+
+Debug and optimized builds use separate object directories. Both build commands
+place their executable at `./wasm-vm`.
+
+The Wasm runner reads `.expect` results and `.runs` argument/result cases, with
+a five-second limit per case. Known failures are listed with reasons in
+`skippedWasmTests` in `Shakefile.hs`; remove entries as support is added. Fixtures
+without expected results and unexpected failures fail the target.
 
 ## Running
 

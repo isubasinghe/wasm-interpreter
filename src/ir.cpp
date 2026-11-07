@@ -1,6 +1,7 @@
 #include "ir.h"
 
-#include <chrono>
+#include <unordered_map>
+#include <utility>
 
 #include "errors.h"
 
@@ -51,117 +52,115 @@ const char* wasm_section_name(byte code) {
 }
 
 
-#define CACHE 1
+namespace {
 
-#if CACHE == 0
-#define REASSIGN(val, ispace, rettype) ({ \
-  this->get##ispace(mod.get##ispace##Idx(val)); \
-})
-#else
-#define REASSIGN(val, ispace, rettype) ({ \
-  auto &cached_val = reassign_cache[val]; \
-  if (!cached_val) {  \
-    cached_val = this->get##ispace(mod.get##ispace##Idx(val));  \
-  } \
-  (rettype*) cached_val; \
-})
-#endif
+using CopyMap = std::unordered_map<const void*, void*>;
 
-
-WasmModule& WasmModule::deepcopy(const WasmModule &mod, const char* log_str) {
-  std::unordered_map<void*, void*> reassign_cache;
-
-  this->magic = mod.magic;
-  this->version = mod.version;
-
-  //
-  this->customs = mod.customs;
-  this->sigs = mod.sigs;
-
-  this->imports = mod.imports;
-
-  this->funcs = mod.funcs;
-  this->tables = mod.tables;
-  this->mems = mod.mems;
-  this->globals = mod.globals;
-
-  this->exports = mod.exports;
-  
-  this->elems = mod.elems;
-
-  this->datas = mod.datas;
-
-  this->start_fn = mod.start_fn ? REASSIGN(mod.start_fn, Func, FuncDecl) : NULL;
-
-  this->has_datacount = mod.has_datacount;
-  this->num_datas_datacount = mod.num_datas_datacount;
-
-  // Patching
-  DescriptorPatch<ImportDecl> (this->imports.list, mod, reassign_cache);
-  DescriptorPatch<ExportDecl> (this->exports, mod, reassign_cache);
-  FunctionPatch (mod, reassign_cache);
-  // Element Patch
-  for (auto &elem : this->elems) {
-    for (auto &fn_ptr : elem.func_indices) {
-      fn_ptr = REASSIGN(fn_ptr, Func, FuncDecl);
-    }
+template<typename Container>
+void map_copies(const Container &source, Container &destination, CopyMap &copies) {
+  auto dest = destination.begin();
+  for(const auto &value: source) {
+    copies.emplace(&value, &*dest++);
   }
-  // Data Patch
-  for (auto &data : this->datas) {
-    if (data.flag != 1) {
-      data.mem = REASSIGN(data.mem, Memory, MemoryDecl);
-    }
-  }
-
-  CustomPatch (mod, reassign_cache);
-  return *this;
 }
 
-
-
-/* Descriptor patching for copy constructor */
 template<typename T>
-void WasmModule::DescriptorPatch (std::list<T> &list, const WasmModule &mod, std::unordered_map<void*, void*> &reassign_cache) {
-  for (auto &v : list) {
-    switch (v.kind) {
-      case KIND_FUNC: v.desc.func = REASSIGN(v.desc.func, Func, FuncDecl); break;
-      case KIND_TABLE: v.desc.table = REASSIGN(v.desc.table, Table, TableDecl); break;
-      case KIND_MEMORY: v.desc.mem = REASSIGN(v.desc.mem, Memory, MemoryDecl); break;
-      case KIND_GLOBAL: v.desc.global = REASSIGN(v.desc.global, Global, GlobalDecl); break;
+T *copied_pointer(T *source, const CopyMap &copies) {
+  if(source == nullptr) {
+    return nullptr;
+  }
+  auto copy = copies.find(source);
+  if(copy == copies.end()) {
+    throw WasmValidationError("module reference points outside its owned data");
+  }
+  return static_cast<T*>(copy->second);
+}
+
+template<typename T>
+void patch_descriptors(std::list<T> &descriptors, const CopyMap &copies) {
+  for(auto &value: descriptors) {
+    switch(value.kind) {
+      case KIND_FUNC: value.desc.func = copied_pointer(value.desc.func, copies); break;
+      case KIND_TABLE: value.desc.table = copied_pointer(value.desc.table, copies); break;
+      case KIND_MEMORY: value.desc.mem = copied_pointer(value.desc.mem, copies); break;
+      case KIND_GLOBAL: value.desc.global = copied_pointer(value.desc.global, copies); break;
       default:
-        ERR("Import/Export kind: %u\n", v.kind);
         throw WasmValidationError("invalid import/export kind");
     }
   }
 }
 
+} // namespace
 
-void WasmModule::FunctionPatch (const WasmModule &mod, std::unordered_map<void*, void*> &reassign_cache) {
-  for (auto &func : this->funcs) {
-    func.sig = REASSIGN(func.sig, Sig, SigDecl);
+WasmModule::WasmModule(const WasmModule &mod)
+    : magic(mod.magic), version(mod.version), customs(mod.customs), sigs(mod.sigs),
+      imports(mod.imports), funcs(mod.funcs), tables(mod.tables), mems(mod.mems),
+      globals(mod.globals), exports(mod.exports), elems(mod.elems), datas(mod.datas),
+      has_datacount(mod.has_datacount), num_datas_datacount(mod.num_datas_datacount) {
+  // Copy containers first, then redirect every internal reference into the copy.
+  CopyMap copies;
+  map_copies(mod.sigs, sigs, copies);
+  map_copies(mod.funcs, funcs, copies);
+  map_copies(mod.tables, tables, copies);
+  map_copies(mod.mems, mems, copies);
+  map_copies(mod.globals, globals, copies);
+
+  for(auto &func: funcs) {
+    func.sig = copied_pointer(func.sig, copies);
   }
-}
+  patch_descriptors(imports.list, copies);
+  patch_descriptors(exports, copies);
+  start_fn = copied_pointer(mod.start_fn, copies);
 
-
-void WasmModule::CustomPatch (const WasmModule &mod, std::unordered_map<void*, void*> &reassign_cache) {
-  for (auto &custom : this->customs) {
-    if (custom.name == "name") {
-      DebugNameDecl &debug = custom.debug;
-      if (!debug.func_assoc.empty()) {
-        for (auto &name_asc : debug.func_assoc) {
-          name_asc.func = REASSIGN(name_asc.func, Func, FuncDecl);
-        }
-      }
-      this->fn_names_debug = &debug.func_assoc;
+  for(auto &elem: elems) {
+    for(auto &func: elem.func_indices) {
+      func = copied_pointer(func, copies);
     }
   }
+  for(auto &data: datas) {
+    data.mem = copied_pointer(data.mem, copies);
+  }
+
+  auto source_custom = mod.customs.begin();
+  for(auto &custom: customs) {
+    copies.emplace(&source_custom->debug.func_assoc, &custom.debug.func_assoc);
+    for(auto &name: custom.debug.func_assoc) {
+      name.func = copied_pointer(name.func, copies);
+    }
+    ++source_custom;
+  }
+  fn_names_debug = copied_pointer(mod.fn_names_debug, copies);
 }
 
-
-WasmModule& WasmModule::operator= (const WasmModule &mod) {
-  return this->deepcopy(mod, "Assign Module");
+void WasmModule::swap(WasmModule &other) noexcept {
+  using std::swap;
+  swap(magic, other.magic);
+  swap(version, other.version);
+  customs.swap(other.customs);
+  sigs.swap(other.sigs);
+  imports.list.swap(other.imports.list);
+  swap(imports.num_funcs, other.imports.num_funcs);
+  swap(imports.num_tables, other.imports.num_tables);
+  swap(imports.num_mems, other.imports.num_mems);
+  swap(imports.num_globals, other.imports.num_globals);
+  funcs.swap(other.funcs);
+  tables.swap(other.tables);
+  mems.swap(other.mems);
+  globals.swap(other.globals);
+  exports.swap(other.exports);
+  elems.swap(other.elems);
+  datas.swap(other.datas);
+  swap(start_fn, other.start_fn);
+  swap(has_datacount, other.has_datacount);
+  swap(num_datas_datacount, other.num_datas_datacount);
+  swap(fn_names_debug, other.fn_names_debug);
 }
 
-WasmModule::WasmModule (const WasmModule &mod) {
-  this->deepcopy(mod, "Copy Module");
+WasmModule& WasmModule::operator=(const WasmModule &mod) {
+  if(this != &mod) {
+    // Keep the original module intact if allocating or patching the copy fails.
+    WasmModule copy(mod);
+    swap(copy);
+  }
+  return *this;
 }
