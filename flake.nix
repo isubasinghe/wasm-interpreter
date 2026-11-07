@@ -31,6 +31,7 @@
             cmake
             gnumake
             clang
+            lld
             clang-tools
             ccls
             wabt

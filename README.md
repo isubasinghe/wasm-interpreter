@@ -62,6 +62,7 @@ runghc Shakefile.hs debug  # build wasm-vm for GDB (-O0, full debug symbols)
 runghc Shakefile.hs tests  # build tests
 runghc Shakefile.hs test   # build and check Wasm fixtures against tests/expect
 runghc Shakefile.hs jit-test # build and run the C++ JIT test suites
+runghc Shakefile.hs test-known-failures # run fixtures listed in skippedWasmTests
 ```
 
 Debug and optimized builds use separate object directories. Both build commands
@@ -71,6 +72,10 @@ The Wasm runner reads `.expect` results and `.runs` argument/result cases, with
 a five-second limit per case. Known failures are listed with reasons in
 `skippedWasmTests` in `Shakefile.hs`; remove entries as support is added. Fixtures
 without expected results and unexpected failures fail the target.
+
+GitHub Actions runs the Wasm and JIT suites on pushes and pull requests. It also
+runs `test-known-failures` in a separate step whose failures do not fail CI. That
+target still returns a failure status locally when any of its fixtures fail.
 
 ## Running
 

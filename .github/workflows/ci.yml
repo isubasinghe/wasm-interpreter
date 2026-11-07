@@ -1,0 +1,36 @@
+name: Tests
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  tests:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+
+      - uses: cachix/install-nix-action@v31
+
+      - name: Build VM and Wasm fixtures
+        id: build
+        run: nix develop --command runghc Shakefile.hs wasm-vm tests
+
+      - name: Wasm tests
+        run: nix develop --command runghc Shakefile.hs test
+
+      - name: JIT tests
+        if: ${{ !cancelled() && steps.build.outcome == 'success' }}
+        run: nix develop --command runghc Shakefile.hs jit-test
+
+      - name: Known failing Wasm tests (informational)
+        if: ${{ !cancelled() && steps.build.outcome == 'success' }}
+        continue-on-error: true
+        run: nix develop --command runghc Shakefile.hs test-known-failures

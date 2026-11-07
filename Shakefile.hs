@@ -174,6 +174,20 @@ main = shakeArgs shakeOptions { shakeFiles = buildDir } $ do
                ++ show failed ++ " failed, " ++ show skipped ++ " skipped"
         unless (passed > 0 && failed == 0) $ fail "Wasm tests failed"
 
+    -- CI runs these separately with continue-on-error so failures remain visible.
+    phony "test-known-failures" $ do
+        need ["wasm-vm", "tests"]
+        results <- forM skippedWasmTests $ \(name, reason) -> do
+            putInfo $ "KNOWN FAILURE " ++ name ++ ": " ++ reason
+            cases <- wasmTestCases name
+            passed <- mapM (runWasmTest $ "tests/wasm" </> name <.> "wasm") cases
+            pure $ and passed
+        let passed = length $ filter id results
+        let failed = length results - passed
+        putInfo $ "Known failing Wasm fixtures: " ++ show passed ++ " passed, "
+               ++ show failed ++ " failed"
+        unless (failed == 0) $ fail "Known failing Wasm tests failed"
+
     phony "jit-test" $ do
         let binaries = [ buildDir </> "release" </> "tests" </> test | test <- jitTests ]
         need binaries
