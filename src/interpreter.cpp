@@ -1,5 +1,6 @@
 #include <stack>
 #include <array>
+#include <format>
 #include <iostream>
 #include <random>
 #include <sstream>
@@ -706,8 +707,8 @@ void Interpreter::run_function(int index, const std::vector<Immediate> args) {
   this->exit_function(&this->functions[index]);
 }
 
-void Interpreter::run_main() {
-  FuncDecl *f;
+void Interpreter::run_main(const std::vector<std::string> &args) {
+  FuncDecl *f = nullptr;
   for(auto &exp: mod.Exports()) {
     if(exp.name == "main" && exp.kind == KIND_FUNC) {
       f = exp.desc.func;
@@ -717,20 +718,25 @@ void Interpreter::run_main() {
   if(f == nullptr) {
     return;
   }
+  if(args.size() != f->sig->params.size()) {
+    throw WasmError("argument count does not match main's signature");
+  }
   std::vector<Immediate> params;
+  size_t index = 0;
   for(auto const &p: f->sig->params) {
+    const std::string &arg = args[index++];
     switch(p) {
       case WASM_TYPE_I32:
-        params.push_back(Immediate(static_cast<int32_t>(9)));
+        params.push_back(Immediate(static_cast<int32_t>(std::stoi(arg))));
         break;
       case WASM_TYPE_I64:
-        params.push_back(Immediate(static_cast<int64_t>(42)));
+        params.push_back(Immediate(static_cast<int64_t>(std::stoll(arg))));
         break;
       case WASM_TYPE_F32:
-        params.push_back(Immediate(static_cast<float>(0.41)));
+        params.push_back(Immediate(std::stof(arg)));
         break;
       case WASM_TYPE_F64:
-        params.push_back(Immediate(static_cast<double>(0.82)));
+        params.push_back(Immediate(std::stod(arg)));
         break;
       default:
         std::cout << "unsupported type" << std::endl;

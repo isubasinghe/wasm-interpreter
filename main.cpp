@@ -14,9 +14,10 @@
 static struct option long_options[] = {
   {"trace", no_argument,  &g_trace, 1},
   {"file-log", no_argument, NULL, 'l'},
-  {"args", optional_argument, NULL, 'a'},
+  {"args", required_argument, NULL, 'a'},
   {"jit-binary", required_argument, NULL, 'j'},
-  {"help", no_argument, NULL, 'h'}
+  {"help", no_argument, NULL, 'h'},
+  {NULL, 0, NULL, 0}
 };
 
 typedef struct args_t {
@@ -120,11 +121,10 @@ int main(int argc, char *argv[]) {
 
   // dump_module(mod);
   Interpreter interpreter = Interpreter(mod, args.file_logging);
-  interpreter.run_main();
+  interpreter.run_main(args.mainargs);
   interpreter.dump_stack();
 
   
 
   return 0;
 }
-

@@ -2,6 +2,7 @@
 #include <stack>
 #include <map>
 #include <memory>
+#include <string>
 #include <vector>
 #include "ir.h"
 
@@ -137,6 +138,6 @@ class Interpreter {
     ~Interpreter();
     std::vector<Instruction> parse_function(const FuncDecl *f);
     void run_function(int index, std::vector<Immediate> args);
-    void run_main();
+    void run_main(const std::vector<std::string> &args);
     void dump_stack();
 };

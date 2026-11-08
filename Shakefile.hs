@@ -30,13 +30,7 @@ skippedWasmTests =
     , ("i32.load1", "i32.load is not implemented")
     , ("load_oob0", "i32.load and memory bounds traps are not implemented")
     , ("call_indirect0", "invalid table entries throw instead of reporting !trap")
-    , ("i32.add0", "CLI -a arguments are not passed to main")
-    , ("i32.eq0", "CLI -a arguments are not passed to main")
-    , ("f64.add0_d", "CLI -a arguments are not passed to main; float formatting differs")
-    , ("br_if0", "CLI -a arguments are not passed to main")
-    , ("br_table0", "CLI -a arguments are not passed to main")
-    , ("if_else0", "CLI -a arguments are not passed to main")
-    , ("if_else_if0", "CLI -a arguments are not passed to main")
+    , ("f64.add0_d", "float formatting differs from the expected fixed precision")
     ]
 
 trim :: String -> String
